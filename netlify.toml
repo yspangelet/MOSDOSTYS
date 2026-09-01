@@ -1,0 +1,45 @@
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# AI replies (drafting/importing several report fields) can legitimately take longer to generate
+# than Netlify's default synchronous function timeout (10 seconds). This raises the ceiling to
+# the maximum available for standard synchronous functions. Note this only takes effect on
+# Netlify Pro/Enterprise plans — on the Free plan the 10-second limit is fixed regardless of this
+# setting. The app's AI features are also now batched into several smaller requests specifically
+# so each one comfortably finishes well under 10 seconds even without this raised ceiling.
+[functions."ai"]
+  timeout = 26
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "same-origin"
+    Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
+    Permissions-Policy = "geolocation=(self), microphone=(), camera=()"
+
+[[headers]]
+  for = "/lobby.html"
+  [headers.values]
+    Cache-Control = "no-store, no-cache, must-revalidate"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-store, no-cache, must-revalidate"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-store, no-cache, must-revalidate"
+
