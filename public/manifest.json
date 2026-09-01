@@ -1,0 +1,13 @@
+{
+  "name": "Lamdeinu",
+  "short_name": "Lamdeinu",
+  "description": "Lamdeinu school management system",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F5F2F6",
+  "theme_color": "#500F32",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
