@@ -59,6 +59,12 @@ async function loadTransportState(store) {
     // reverseGeocodeServer below. Without this, the key was never loaded into `state` at all,
     // so it was silently unavailable no matter what the rest of this file tried to do with it.
     'googleMapsApiKey',
+    // Added alongside isLegStartedServer/advanceGpsStopProgress-based progress — both of those
+    // checks silently read as "nothing here" without these two keys actually being fetched, even
+    // though the frontend was saving them correctly the whole time. This file loads its OWN
+    // narrow list of keys (for phone-response speed) rather than the full app state, so a key
+    // being used elsewhere in this file is never enough — it has to be added here explicitly too.
+    'transportRouteStarts', 'transportGpsProgress',
   ];
   const result = {};
   await Promise.all(keys.map(async (k) => { result[k] = await store.get(SK_PREFIX + k, { type: 'json' }); }));
