@@ -21560,14 +21560,18 @@ function releaseWakeLock(){
 document.addEventListener('visibilitychange', ()=>{
   if(!document.hidden && __liveLocationWatchId!==null) acquireWakeLock();
 });
-// Advances STATE.transportGpsProgress sequentially: checks the NEXT stop past whatever GPS has
-// already confirmed today, and if the live position is within ~150m (the same arrival radius
-// maybePromptArrival already uses), confirms it — then keeps checking the following stop in the
-// same tick, so a bus moving fast between two closely-spaced stops can confirm both in one ping
-// instead of getting stuck a stop behind. Deliberately sequential/one-at-a-time rather than
-// "nearest stop by straight-line distance" — a stop three blocks ahead being geometrically closer
-// than the very next one (a loop in the road, a park-adjacent street) must never let this skip
-// ahead past a stop the bus hasn't actually reached yet.
+// Advances STATE.transportGpsProgress: scans FORWARD from whatever GPS has already confirmed
+// today, looking for the FURTHEST stop the live position currently sits within ~150m of (the
+// same arrival radius maybePromptArrival already uses) — not just the very next unconfirmed one.
+// Checking every candidate ahead, rather than requiring stops to be confirmed one at a time in
+// strict order, matters because GPS only ticks roughly every 15s: a bus moving at normal street
+// speed can cross an entire stop's 150m radius between two ticks and never get caught inside it,
+// which would otherwise permanently stall every stop after it even though the bus has genuinely
+// moved on. Jumping straight to the furthest current match treats any stops in between as passed
+// too, same as a manual press further along already does. This does mean a stop whose radius
+// happens to sit near the live position for an unrelated reason (a looping road, a park-adjacent
+// street) could get wrongly confirmed slightly early — an intentional trade-off for "don't get
+// stuck," not a claim that GPS proximity means someone was actually boarded there.
 function advanceGpsStopProgress(routeId, dirOrTripId, lat, lng){
   const today = todayISO();
   const key = routeId==='trip' ? ('trip_'+dirOrTripId) : (routeId+'_'+dirOrTripId);
@@ -21582,17 +21586,14 @@ function advanceGpsStopProgress(routeId, dirOrTripId, lat, lng){
   if(!orderedStops.length) return;
   STATE.transportGpsProgress[today] = STATE.transportGpsProgress[today] || {};
   const existingIdx = STATE.transportGpsProgress[today][key];
-  let idx = (existingIdx===undefined || existingIdx===null) ? -1 : existingIdx;
-  let advanced = false;
-  while(idx+1 < orderedStops.length){
-    const nextStop = orderedStops[idx+1];
-    if(nextStop.lat==null || nextStop.lng==null) break;
-    if(distanceMeters(lat, lng, nextStop.lat, nextStop.lng) <= 150){
-      idx++;
-      advanced = true;
-    } else break;
+  const startIdx = (existingIdx===undefined || existingIdx===null) ? -1 : existingIdx;
+  let furthestMatch = startIdx;
+  for(let i=startIdx+1; i<orderedStops.length; i++){
+    const candidate = orderedStops[i];
+    if(candidate.lat==null || candidate.lng==null) continue;
+    if(distanceMeters(lat, lng, candidate.lat, candidate.lng) <= 150) furthestMatch = i;
   }
-  if(advanced) STATE.transportGpsProgress[today][key] = idx;
+  if(furthestMatch > startIdx) STATE.transportGpsProgress[today][key] = furthestMatch;
 }
 function startSharingLiveLocation(routeId, dir){
   if(!navigator.geolocation){ toast('This browser/device does not support location sharing'); return; }
