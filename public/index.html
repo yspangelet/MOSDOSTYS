@@ -21572,6 +21572,16 @@ document.addEventListener('visibilitychange', ()=>{
 // happens to sit near the live position for an unrelated reason (a looping road, a park-adjacent
 // street) could get wrongly confirmed slightly early — an intentional trade-off for "don't get
 // stuck," not a claim that GPS proximity means someone was actually boarded there.
+// Advances STATE.transportGpsProgress: among all not-yet-confirmed stops, finds whichever is
+// CLOSEST to the live position right now, and confirms it (and everything before it) if that
+// closest one is within ~150m (the same arrival radius maybePromptArrival already uses).
+// Deliberately "closest," not "furthest match in range" — on a cluster of closely-spaced stops
+// (a short block with several pickups, or streets that loop back near each other), more than one
+// stop can sit within range at the same time, and blindly taking the furthest one risks
+// leapfrogging over a stop the bus hasn't actually reached yet just because a later one happens
+// to be geographically nearby too. Preferring the nearest match keeps the ordering honest in that
+// case, while still recovering from an occasional missed GPS tick (see the loop scanning ahead,
+// not just checking the immediate next stop) rather than getting permanently stuck a stop behind.
 function advanceGpsStopProgress(routeId, dirOrTripId, lat, lng){
   const today = todayISO();
   const key = routeId==='trip' ? ('trip_'+dirOrTripId) : (routeId+'_'+dirOrTripId);
@@ -21587,13 +21597,14 @@ function advanceGpsStopProgress(routeId, dirOrTripId, lat, lng){
   STATE.transportGpsProgress[today] = STATE.transportGpsProgress[today] || {};
   const existingIdx = STATE.transportGpsProgress[today][key];
   const startIdx = (existingIdx===undefined || existingIdx===null) ? -1 : existingIdx;
-  let furthestMatch = startIdx;
+  let nearestIdx = -1, nearestDist = Infinity;
   for(let i=startIdx+1; i<orderedStops.length; i++){
     const candidate = orderedStops[i];
     if(candidate.lat==null || candidate.lng==null) continue;
-    if(distanceMeters(lat, lng, candidate.lat, candidate.lng) <= 150) furthestMatch = i;
+    const d = distanceMeters(lat, lng, candidate.lat, candidate.lng);
+    if(d<=150 && d<nearestDist){ nearestDist=d; nearestIdx=i; }
   }
-  if(furthestMatch > startIdx) STATE.transportGpsProgress[today][key] = furthestMatch;
+  if(nearestIdx > startIdx) STATE.transportGpsProgress[today][key] = nearestIdx;
 }
 function startSharingLiveLocation(routeId, dir){
   if(!navigator.geolocation){ toast('This browser/device does not support location sharing'); return; }
