@@ -1,7 +1,7 @@
 {
-  "name": "Lamdeinu",
-  "short_name": "Lamdeinu",
-  "description": "Lamdeinu school management system",
+  "name": "Ledger",
+  "short_name": "Ledger",
+  "description": "School operations management system",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#F5F2F6",

@@ -210,6 +210,13 @@ function currentStopProgress(orderedStops, log, studentsByStopId) {
 function isLegCompletedServer(state, dateISO, key) {
   return !!(((state.transportRouteCompletions || {})[dateISO] || {})[key]);
 }
+// Mirrors isLegStarted in index.html — true once a driver has pressed "🚦 Start route & share my
+// location" for this specific leg today. Used only to word the "nothing checked in yet" case
+// correctly: "hasn't started yet" when the driver truly hasn't started, vs. "before stop number 1"
+// when they HAVE started (marking is locked until then) but just haven't reached the first stop.
+function isLegStartedServer(state, dateISO, key) {
+  return !!(((state.transportRouteStarts || {})[dateISO] || {})[key]);
+}
 // Same calendar rule as Driver View, Reports, and Attendance History in the app itself: a
 // holiday, a non-school weekday, or a date outside the school year's actual start/end range all
 // mean "nothing is expected to run today" for a REGULAR ROUTE — a fact that has nothing to do
@@ -300,21 +307,31 @@ async function studentStatusText(student, state, dateISO, dayAbbr, minutes) {
     return `${student.name} was ${dir === 'am' ? 'picked up' : 'dropped off'} at ${stop.label} at ${fmtTime12(entry.time)}.${liveNote}`;
   }
 
-  // Not completed, and this specific student hasn't been checked in yet — describe overall route
-  // progress purely from what's actually been MARKED so far (see currentStopProgress; never from
-  // live GPS proximity alone, so a detour or an out-of-order stop can't make this claim more
-  // progress than the driver has actually confirmed).
+  // Progress is the FURTHER of two independent signals: what the driver has actually marked
+  // (currentStopProgress, from real boarded/absent presses) and what live GPS has actually
+  // confirmed reaching (see advanceGpsStopProgress in index.html, which persists this the moment
+  // the driver's position comes within ~150m of a stop, sequentially — never a straight-line
+  // "nearest stop," so a loop in the road or a park-adjacent street can't skip ahead past a stop
+  // not actually reached yet). Taking the max of the two means an unmarked stop still gets
+  // reported as passed once the bus's real position has gone by it, without requiring the driver
+  // to press anything — while a manual mark on a LATER stop (if GPS sharing was off, or spotty)
+  // still counts too.
   const orderedStops = (route[dir] || []).map((e) => (state.transportStops || []).find((s) => s.id === e.stopId)).filter(Boolean);
   const myIdx = orderedStops.findIndex((s) => s.id === stop.id);
   const studentsByStopId = {};
   (state.students || []).forEach((s) => { if (s.transportStopId) (studentsByStopId[s.transportStopId] = studentsByStopId[s.transportStopId] || []).push(s.id); });
-  const progress = currentStopProgress(orderedStops, log, studentsByStopId);
+  const markProgress = currentStopProgress(orderedStops, log, studentsByStopId);
+  const gpsIdx = ((state.transportGpsProgress || {})[dateISO] || {})[key];
+  const progress = (gpsIdx != null && gpsIdx > (markProgress ? markProgress.idx : -1)) ? { idx: gpsIdx } : markProgress;
 
   if (myIdx < 0) {
     return `${student.name}'s ${legLabel} has not been recorded yet today.${liveNote}`;
   }
   const myStopNum = myIdx + 1;
   if (!progress) {
+    if (!isLegStartedServer(state, dateISO, key)) {
+      return `The route has not started yet today. ${student.name}'s stop is number ${myStopNum}.${liveNote}`;
+    }
     return `The route is now before stop number 1. ${student.name}'s stop is number ${myStopNum}.${liveNote}`;
   }
   const busStopNum = progress.idx + 1;
@@ -402,22 +419,26 @@ async function tripStopStatusText(trip, stop, state, dateISO) {
     return `${riderLabel} was picked up for the ${tripName} trip at ${fmtTime12(entry.time)}.${liveNote}`;
   }
 
-  // Not completed, and this rider hasn't been checked in yet — same log-only progress rule as
-  // the regular-route version (see currentStopProgress): never inferred from live GPS proximity
-  // alone, so a detour can't make this claim more progress than the driver has actually marked.
+  // Progress is the FURTHER of what's been marked and what live GPS has actually confirmed
+  // reaching — same rule as the regular-route version above (see advanceGpsStopProgress).
   const orderedStops = customTripStopsOf(trip);
   const myIdx = orderedStops.findIndex((s) => s.id === stop.id);
   const studentsByStopId = {};
   orderedStops.forEach((s) => { studentsByStopId[s.id] = [s.id]; });
   const pseudoLog = {};
   orderedStops.forEach((s) => { if (log[s.id]) pseudoLog[s.id] = log[s.id]; });
-  const progress = currentStopProgress(orderedStops, pseudoLog, studentsByStopId);
+  const markProgress = currentStopProgress(orderedStops, pseudoLog, studentsByStopId);
+  const gpsIdx = ((state.transportGpsProgress || {})[dateISO] || {})['trip_' + trip.id];
+  const progress = (gpsIdx != null && gpsIdx > (markProgress ? markProgress.idx : -1)) ? { idx: gpsIdx } : markProgress;
 
   if (myIdx < 0) {
     return `${riderLabel}'s ${tripName} trip has not been recorded yet today.${liveNote}`;
   }
   const myStopNum = myIdx + 1;
   if (!progress) {
+    if (!isLegStartedServer(state, dateISO, 'trip_' + trip.id)) {
+      return `The route has not started yet today. ${riderLabel}'s stop is number ${myStopNum}.${liveNote}`;
+    }
     return `The route is now before stop number 1. ${riderLabel}'s stop is number ${myStopNum}.${liveNote}`;
   }
   const busStopNum = progress.idx + 1;
