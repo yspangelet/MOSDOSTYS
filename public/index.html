@@ -21578,18 +21578,6 @@ function releaseWakeLock(){
 document.addEventListener('visibilitychange', ()=>{
   if(!document.hidden && __liveLocationWatchId!==null) acquireWakeLock();
 });
-// Advances STATE.transportGpsProgress: scans FORWARD from whatever GPS has already confirmed
-// today, looking for the FURTHEST stop the live position currently sits within ~150m of (the
-// same arrival radius maybePromptArrival already uses) — not just the very next unconfirmed one.
-// Checking every candidate ahead, rather than requiring stops to be confirmed one at a time in
-// strict order, matters because GPS only ticks roughly every 15s: a bus moving at normal street
-// speed can cross an entire stop's 150m radius between two ticks and never get caught inside it,
-// which would otherwise permanently stall every stop after it even though the bus has genuinely
-// moved on. Jumping straight to the furthest current match treats any stops in between as passed
-// too, same as a manual press further along already does. This does mean a stop whose radius
-// happens to sit near the live position for an unrelated reason (a looping road, a park-adjacent
-// street) could get wrongly confirmed slightly early — an intentional trade-off for "don't get
-// stuck," not a claim that GPS proximity means someone was actually boarded there.
 // Advances STATE.transportGpsProgress: among all not-yet-confirmed stops, finds whichever is
 // CLOSEST to the live position right now, and confirms it (and everything before it) if that
 // closest one is within ~150m (the same arrival radius maybePromptArrival already uses).
@@ -21654,21 +21642,41 @@ function startSharingLiveLocation(routeId, dir){
       if(now-lastSaveAt < 15000) return;
       lastSaveAt = now;
       STATE.transportLiveLocations[key] = { lat: pos.coords.latitude, lng: pos.coords.longitude, updatedAt: now };
-      // Sequentially confirms any stop(s) the live position has now actually reached, independent
-      // of whether the driver has pressed boarded/absent for them — see advanceGpsStopProgress.
-      advanceGpsStopProgress(routeId, dir, pos.coords.latitude, pos.coords.longitude);
-      // Checks whether the driver has arrived at wherever this leg actually ends, and — if so —
-      // brings up the same "mark complete?" confirmation the manual button shows, so a driver
-      // doesn't need to remember to scroll down and tap it themselves once they get there.
-      maybePromptArrival(routeId, dir, pos.coords.latitude, pos.coords.longitude);
-      // Also lays down today's breadcrumb trail for this leg — same idea, coarser interval (60s
-      // instead of 15s), since saveState re-uploads this whole array on every single change (see
-      // saveState's per-top-level-key diffing) and a route only needs roughly one point per
-      // minute to draw a recognizable path later — appendLiveTrailPoint handles capping/pruning.
-      if(now-lastTrailSaveAt >= 60000){
-        lastTrailSaveAt = now;
-        appendLiveTrailPoint(key, today, pos.coords.latitude, pos.coords.longitude, now);
-      }
+      // The actual location save is the one thing here that must never be skipped — it's saved
+      // FIRST and on its own, immediately, before any of the extra logic below runs. Everything
+      // from here down (GPS stop-progress, arrival prompting, the breadcrumb trail) is genuinely
+      // optional on top of that core save, so each is wrapped in its own try/catch: a bug in any
+      // one of them must never again be able to silently block the location ping itself from
+      // reaching the server, which is exactly what could happen when they all shared one
+      // unguarded call to saveState() at the very end.
+      saveState();
+      try {
+        // Sequentially confirms any stop(s) the live position has now actually reached,
+        // independent of whether the driver has pressed boarded/absent for them — see
+        // advanceGpsStopProgress.
+        advanceGpsStopProgress(routeId, dir, pos.coords.latitude, pos.coords.longitude);
+      } catch(e) { console.error('advanceGpsStopProgress failed', e); }
+      try {
+        // Checks whether the driver has arrived at wherever this leg actually ends, and — if so
+        // — brings up the same "mark complete?" confirmation the manual button shows, so a
+        // driver doesn't need to remember to scroll down and tap it themselves once they get
+        // there.
+        maybePromptArrival(routeId, dir, pos.coords.latitude, pos.coords.longitude);
+      } catch(e) { console.error('maybePromptArrival failed', e); }
+      try {
+        // Also lays down today's breadcrumb trail for this leg — same idea, coarser interval
+        // (60s instead of 15s), since saveState re-uploads this whole array on every single
+        // change (see saveState's per-top-level-key diffing) and a route only needs roughly one
+        // point per minute to draw a recognizable path later — appendLiveTrailPoint handles
+        // capping/pruning.
+        if(now-lastTrailSaveAt >= 60000){
+          lastTrailSaveAt = now;
+          appendLiveTrailPoint(key, today, pos.coords.latitude, pos.coords.longitude, now);
+        }
+      } catch(e) { console.error('appendLiveTrailPoint failed', e); }
+      // A second save picks up whatever the try/catch blocks above changed (GPS progress, a
+      // completion, a new trail point) — separate from the first, unconditional one above, and
+      // fine to skip entirely if nothing here actually changed anything.
       saveState();
     },
     (err)=>{
