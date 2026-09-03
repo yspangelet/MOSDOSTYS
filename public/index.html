@@ -18106,9 +18106,15 @@ function renderRealTransportMap(el, r, dir, stops){
   map.addListener('idle', ()=>{ __liveMapLastView[viewKey] = { center: map.getCenter().toJSON(), zoom: map.getZoom() }; });
   const arrivalTimes = stopArrivalTimesForRoute(r.id, dir, todayISO());
   orderedPoints.forEach((p, i)=>{
+    // Stop numbers must count only real stops, never the school point — on PM, school sits
+    // FIRST in orderedPoints (see above), so using the raw list index i here would number the
+    // real first stop "2" instead of "1", and every stop after it one too high. Counting how
+    // many non-school points come before this one gives the correct number on both AM (school
+    // last) and PM (school first) without needing two different formulas.
+    const stopNum = p.isSchool ? null : orderedPoints.slice(0,i).filter(o=>!o.isSchool).length + 1;
     const marker = new g.Marker({
       position:{lat:p.lat,lng:p.lng}, map,
-      label: p.isSchool? undefined : { text:String(i+1), color:'#fff', fontSize:'11px', fontWeight:'700' },
+      label: p.isSchool? undefined : { text:String(stopNum), color:'#fff', fontSize:'11px', fontWeight:'700' },
       icon: p.isSchool? { path: g.SymbolPath.CIRCLE, scale:12, fillColor:'#1A1A2E', fillOpacity:1, strokeColor:'#fff', strokeWeight:2 }
                        : { path: g.SymbolPath.CIRCLE, scale:11, fillColor:'#B08D57', fillOpacity:1, strokeColor:'#fff', strokeWeight:2 },
       title: p.label,
