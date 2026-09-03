@@ -313,22 +313,17 @@ async function studentStatusText(student, state, dateISO, dayAbbr, minutes) {
     return `${student.name} was ${dir === 'am' ? 'picked up' : 'dropped off'} at ${stop.label} at ${fmtTime12(entry.time)}.${liveNote}`;
   }
 
-  // Progress is the FURTHER of two independent signals: what the driver has actually marked
-  // (currentStopProgress, from real boarded/absent presses) and what live GPS has actually
-  // confirmed reaching (see advanceGpsStopProgress in index.html, which persists this the moment
-  // the driver's position comes within ~150m of a stop, sequentially — never a straight-line
-  // "nearest stop," so a loop in the road or a park-adjacent street can't skip ahead past a stop
-  // not actually reached yet). Taking the max of the two means an unmarked stop still gets
-  // reported as passed once the bus's real position has gone by it, without requiring the driver
-  // to press anything — while a manual mark on a LATER stop (if GPS sharing was off, or spotty)
-  // still counts too.
+  // Progress is based purely on what's actually been MARKED (see currentStopProgress) — GPS
+  // proximity is deliberately no longer blended in here. It was, briefly, but proved unreliable
+  // enough in practice (closely-clustered stops or looping streets could get confirmed before
+  // the bus genuinely reached them) that a manual press is worth requiring again, even at the
+  // cost of "stuck" progress when a driver skips marking a stop. transportGpsProgress itself
+  // still gets written (see advanceGpsStopProgress in index.html) in case this is revisited.
   const orderedStops = (route[dir] || []).map((e) => (state.transportStops || []).find((s) => s.id === e.stopId)).filter(Boolean);
   const myIdx = orderedStops.findIndex((s) => s.id === stop.id);
   const studentsByStopId = {};
   (state.students || []).forEach((s) => { if (s.transportStopId) (studentsByStopId[s.transportStopId] = studentsByStopId[s.transportStopId] || []).push(s.id); });
-  const markProgress = currentStopProgress(orderedStops, log, studentsByStopId);
-  const gpsIdx = ((state.transportGpsProgress || {})[dateISO] || {})[key];
-  const progress = (gpsIdx != null && gpsIdx > (markProgress ? markProgress.idx : -1)) ? { idx: gpsIdx } : markProgress;
+  const progress = currentStopProgress(orderedStops, log, studentsByStopId);
 
   if (myIdx < 0) {
     return `${student.name}'s ${legLabel} has not been recorded yet today.${liveNote}`;
@@ -425,17 +420,15 @@ async function tripStopStatusText(trip, stop, state, dateISO) {
     return `${riderLabel} was picked up for the ${tripName} trip at ${fmtTime12(entry.time)}.${liveNote}`;
   }
 
-  // Progress is the FURTHER of what's been marked and what live GPS has actually confirmed
-  // reaching — same rule as the regular-route version above (see advanceGpsStopProgress).
+  // Progress is based purely on what's actually been marked — see the reasoning above the
+  // regular-route version of this same computation.
   const orderedStops = customTripStopsOf(trip);
   const myIdx = orderedStops.findIndex((s) => s.id === stop.id);
   const studentsByStopId = {};
   orderedStops.forEach((s) => { studentsByStopId[s.id] = [s.id]; });
   const pseudoLog = {};
   orderedStops.forEach((s) => { if (log[s.id]) pseudoLog[s.id] = log[s.id]; });
-  const markProgress = currentStopProgress(orderedStops, pseudoLog, studentsByStopId);
-  const gpsIdx = ((state.transportGpsProgress || {})[dateISO] || {})['trip_' + trip.id];
-  const progress = (gpsIdx != null && gpsIdx > (markProgress ? markProgress.idx : -1)) ? { idx: gpsIdx } : markProgress;
+  const progress = currentStopProgress(orderedStops, pseudoLog, studentsByStopId);
 
   if (myIdx < 0) {
     return `${riderLabel}'s ${tripName} trip has not been recorded yet today.${liveNote}`;

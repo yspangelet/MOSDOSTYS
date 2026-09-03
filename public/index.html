@@ -18032,8 +18032,6 @@ function renderRealCustomTripMap(el, t, stops){
   // — kept as a live read here rather than a separate helper like stopArrivalTimesForRoute, since
   // a Custom Trip's log is already keyed directly by stopId with no per-rider fan-out to collapse.
   const tripLog = ((STATE.customTripLog[todayISO()]||{})[t.id]) || {};
-  // Same GPS-vs-manual reasoning as the regular-route map above.
-  const gpsIdxTrip = ((STATE.transportGpsProgress||{})[todayISO()]||{})['trip_'+t.id];
   orderedPoints.forEach((p,i)=>{
     // Start and Destination are real points on the route but never counted in the rider-facing
     // stop numbering — a Start point pushed onto the front of this array would otherwise shift
@@ -18048,15 +18046,12 @@ function renderRealCustomTripMap(el, t, stops){
       title: p.label,
     });
     // Hovering (or tapping, for touch) a stop shows when the driver actually checked this rider
-    // in today (same idea as the regular-route Live Map's tooltip), OR, absent that, whether live
-    // GPS has confirmed the bus reaching this stop anyway.
+    // in today — same idea as the regular-route Live Map's tooltip (see
+    // stopArrivalTimesForRoute), just reading straight from this trip's own per-stop log instead.
     let timeLine = '';
     if(!p.isDest && !p.isStart){
       const entry = tripLog[p.stopId];
-      const stopIdx = displayNum-1;
-      if(entry) timeLine = `<br><span style="color:#1E7B4D;">🕐 Bus here ~${fmtTime(entry.time)}${entry.status==='absent'?' (marked absent)':''}</span>`;
-      else if(gpsIdxTrip!=null && stopIdx<=gpsIdxTrip) timeLine = `<br><span style="color:#1E7B4D;">📍 Bus passed here (from GPS — not manually checked in)</span>`;
-      else timeLine = `<br><span style="color:#8A5A1E;">Not checked in yet today</span>`;
+      timeLine = entry? `<br><span style="color:#1E7B4D;">🕐 Bus here ~${fmtTime(entry.time)}${entry.status==='absent'?' (marked absent)':''}</span>` : `<br><span style="color:#8A5A1E;">Not checked in yet today</span>`;
     }
     const info = new g.InfoWindow({ content: `<div style="font-size:13px;">${p.isDest?'🏁 ':p.isStart?'🚦 ':''}${escapeHtml(p.label)}${timeLine}</div>` });
     marker.addListener('mouseover', ()=>info.open(map, marker));
@@ -18110,13 +18105,6 @@ function renderRealTransportMap(el, r, dir, stops){
   const map = new g.Map(el, { center: savedView? savedView.center : bounds.getCenter(), zoom: savedView? savedView.zoom : 12, mapTypeControl:false, streetViewControl:false, fullscreenControl:true });
   map.addListener('idle', ()=>{ __liveMapLastView[viewKey] = { center: map.getCenter().toJSON(), zoom: map.getZoom() }; });
   const arrivalTimes = stopArrivalTimesForRoute(r.id, dir, todayISO());
-  // GPS can confirm a stop as passed with zero button presses (see advanceGpsStopProgress) — this
-  // tooltip needs to reflect that too, or it contradicts what the phone system tells callers
-  // about the exact same stop, showing "not checked in" for one the driver's own GPS already
-  // drove past. stopIdx here matches the same ordering advanceGpsStopProgress writes against
-  // (stops only, school excluded), NOT orderedPoints' own index i, which shifts by one on PM legs
-  // once school is prepended in front of the stops.
-  const gpsIdx = ((STATE.transportGpsProgress||{})[todayISO()]||{})[viewKey];
   orderedPoints.forEach((p, i)=>{
     const marker = new g.Marker({
       position:{lat:p.lat,lng:p.lng}, map,
@@ -18126,16 +18114,14 @@ function renderRealTransportMap(el, r, dir, stops){
       title: p.label,
     });
     // Hovering (or tapping, for touch) a stop shows when the driver actually checked someone in
-    // there today (see stopArrivalTimesForRoute for exactly what that time means and doesn't
-    // mean — a rider's own check-in time, not a real GPS breadcrumb), OR, absent that, whether
-    // live GPS has confirmed the bus reaching this stop anyway.
+    // there today — see stopArrivalTimesForRoute for exactly what that time means and doesn't
+    // mean (a rider's own check-in time, not a real GPS breadcrumb). Deliberately marks-only —
+    // this briefly also showed a GPS-inferred "passed" state, which proved unreliable enough in
+    // practice (closely-clustered stops, looping streets) to be worth reverting.
     let timeLine = '';
     if(!p.isSchool){
       const t = arrivalTimes.get(p.stopId);
-      const stopIdx = stops.findIndex(s=>s.id===p.stopId);
-      if(t) timeLine = `<br><span style="color:#1E7B4D;">🕐 Bus here ~${fmtTime(t)}</span>`;
-      else if(gpsIdx!=null && stopIdx>=0 && stopIdx<=gpsIdx) timeLine = `<br><span style="color:#1E7B4D;">📍 Bus passed here (from GPS — not manually checked in)</span>`;
-      else timeLine = `<br><span style="color:#8A5A1E;">Not checked in yet today</span>`;
+      timeLine = t? `<br><span style="color:#1E7B4D;">🕐 Bus here ~${fmtTime(t)}</span>` : `<br><span style="color:#8A5A1E;">Not checked in yet today</span>`;
     }
     const info = new g.InfoWindow({ content: `<div style="font-size:13px;">${p.isSchool? '🏫 ' : ''}${escapeHtml(p.label)}${timeLine}</div>` });
     marker.addListener('mouseover', ()=>info.open(map, marker));
