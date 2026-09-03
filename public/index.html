@@ -296,7 +296,7 @@ let VIEW = { tab:'dashboard', userId:null, realUserId:null, notifPanelOpen:false
 let __lastRenderedTab = null; // tracks the tab shown at the last render, so scroll position can be preserved on same-tab refreshes but reset on real tab switches
 let DRAG_STATE = { draggingId:null, justDragged:false };
 const STORAGE_KEY = 'ledger_school_v2';
-const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat'];
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 // ---------- Hebrew calendar (School Calendar tab) ----------
 // A real conversion, not a decorative approximation — but deliberately scoped to only the Hebrew
 // years actually verified against hebcal.com (the standard reference), rather than a from-scratch
@@ -7598,14 +7598,16 @@ function renderSchoolCalendar(){
   }
   const cellMinHeight = isWeekView ? 220 : 112;
 
-  // Distinct, wall-calendar look (deep maroon header, weekend shading, serif month title) rather
-  // than another generic data-grid card — this is meant to read as "the school's calendar" at a
-  // glance, not as a filterable schedule/report table like Schedule or Reports.
-  const weekHeader = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d,i)=>`<div style="text-align:center;font-weight:700;font-size:12px;color:${i===0||i===6?'var(--rose)':'var(--ink-soft)'};padding:6px 4px;text-transform:uppercase;letter-spacing:.03em;">${d}</div>`).join('');
+  // Distinct, wall-calendar look (deep maroon header, non-school-day shading, serif month title)
+  // rather than another generic data-grid card — this is meant to read as "the school's calendar"
+  // at a glance, not as a filterable schedule/report table like Schedule or Reports. Shading is
+  // driven by STATE.schoolDays, not a fixed Sat/Sun assumption, so a school that runs Sunday (or
+  // is closed some OTHER weekday) sees that reflected here too, not a hardcoded "weekend" look.
+  const weekHeader = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d,i)=>`<div style="text-align:center;font-weight:700;font-size:12px;color:${!STATE.schoolDays.includes(d)?'var(--rose)':'var(--ink-soft)'};padding:6px 4px;text-transform:uppercase;letter-spacing:.03em;">${d}</div>`).join('');
 
   const cellsHtml = cells.map((dateISO,idx)=>{
     const col = idx%7;
-    const isWeekend = col===0 || col===6;
+    const isWeekend = !STATE.schoolDays.includes(['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][col]);
     if(!dateISO) return `<div style="min-height:${cellMinHeight}px;background:${isWeekend?'var(--sand)':'var(--surface-2)'};border-radius:6px;opacity:.5;"></div>`;
     const dayNum = Number(dateISO.slice(8,10));
     const isToday = dateISO===today;
@@ -20698,7 +20700,7 @@ function nextOccurrenceForDirection(dir){
   let d = new Date();
   for(let i=0;i<8;i++){
     const jsDay = d.getDay(); // JS: 0=Sun...6=Sat
-    const dow = jsDay===0 ? null : DAYS[jsDay-1]; // DAYS is Mon-first with no Sunday entry — Sunday is never a school day in this app
+    const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][jsDay]; // same mapping as dayName() — DAYS now includes Sun, so no day is hardcoded out here
     if(dow && STATE.schoolDays.includes(dow)){
       const times = effectiveTransportTimes(dow);
       const timeStr = dir==='am'? times.amArrival : times.pmDismissal;
