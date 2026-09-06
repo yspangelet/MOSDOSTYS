@@ -1610,7 +1610,7 @@ function migrateState(){
   // Per-field toggles for optional parts of a student's profile that not every school tracks —
   // starts with diagnosis, extensible the same way if another field needs the same treatment
   // later. Defaults to true (shown) so this is invisible until an Admin actually turns one off.
-  STATE.studentFieldToggles = STATE.studentFieldToggles || { diagnosis:true };
+  STATE.studentFieldToggles = STATE.studentFieldToggles || { diagnosis:true, yiddishNames:true, transportation:true, respiteSelfDirection:true };
   // Which compliance rings show on the Dashboard AND Oversight (same underlying widget, see
   // renderComplianceRingsRow) — a school that doesn't track, say, mandates at all can turn that
   // ring off everywhere it would otherwise appear, rather than it staying visible just because
@@ -3061,6 +3061,8 @@ const PERMISSION_DEFS = [
   {key:'printBillingSheets', label:'Print Respite/billing sheets &amp; invoices (without seeing rates or $ summaries)', category:'Billing'},
   {key:'manageFamilies', label:'Manage Families/Parents — confirm sibling groupings, edit family labels, choose combined vs. separate tuition statements', category:'Families'},
   {key:'viewFamilies', label:'View the Families/Parents directory, read-only (no linking/unlinking or changing statement grouping)', category:'Families'},
+  {key:'manageRegistration', label:'Manage Registration — edit the letter text, pricing setup, and print/email Registration & Tuition documents', category:'Registration'},
+  {key:'viewRegistration', label:'View the Registration tab, read-only (print/email only, no editing the letter or pricing)', category:'Registration'},
   {key:'manageHRIntake', label:'Manage new hire applications &amp; staff documents (School only) — includes SSN, pay info &amp; uploaded personnel files', category:'HR / Staff Intake'},
   {key:'approveOnboardingDocs', label:'Review, approve, or reject uploaded onboarding documents (Office Manager) — without this, manageHRIntake can still upload &amp; preview documents but cannot approve/reject them', category:'HR / Staff Intake'},
   {key:'viewPrivilegedStudentDocs', label:'View privileged student documents — SSN copies, sensitive legal/consent forms marked private at upload', category:'HR / Staff Intake'},
@@ -3075,7 +3077,7 @@ const PERMISSION_DEFS = [
   {key:'sendTransportBroadcasts', label:'Send broadcast messages/calls to parents about transportation (a route, a Custom Route, or everyone) — separate from route-editing or report-viewing, since this reaches real people\'s phones', category:'Transportation'},
 ];
 // Grouped once, in a fixed category order, for the redesigned matrix below.
-const PERMISSION_CATEGORY_ORDER = ['Daily editing','Deleting things','Reports & templates','Oversight & visibility','School configuration','Accounts & security','Meetings & communication','Billing','Families','HR / Staff Intake','Transportation'];
+const PERMISSION_CATEGORY_ORDER = ['Daily editing','Deleting things','Reports & templates','Oversight & visibility','School configuration','Accounts & security','Meetings & communication','Billing','Families','Registration','HR / Staff Intake','Transportation'];
 function permissionDefsByCategory(){
   return PERMISSION_CATEGORY_ORDER.map(cat=>({ name:cat, items: PERMISSION_DEFS.filter(p=>p.category===cat) })).filter(g=>g.items.length);
 }
@@ -3687,29 +3689,30 @@ function render(){
         </div>
         <div class="nav-section">
           ${roleCanSeeTab(currentStaff().role,'dashboard')? navItem('dashboard','🏠','Dashboard') : ''}
-          ${roleCanSeeTab(currentStaff().role,'students')? navItem('students','👦','Students') : ''}
-          ${roleCanSeeTab(currentStaff().role,'staff')? navItem('staff','🧑','Staff') : ''}
-          ${roleCanSeeTab(currentStaff().role,'setup')? navItem('setup','🏷️','Classes') : ''}
-          ${roleCanSeeTab(currentStaff().role,'schedule')? navItem('schedule','🗓️','Schedule') : ''}
-          ${roleCanSeeTab(currentStaff().role,'calendar')? navItem('calendar','🌙','Calendar') : ''}
-          ${roleCanSeeTab(currentStaff().role,'attendance')? navItem('attendance','✔️','Attendance') : ''}
-          ${(currentStaff().role==='Admin' || can('manageBilling') || can('printBillingSheets'))? navItem('billing','💳','Billing') : ''}
-          ${(currentStaff().role==='Admin' || can('manageFamilies') || can('viewFamilies'))? navItem('families','👪','Families') : ''}
-          ${(currentStaff().role==='Admin' || can('manageTransportSetup') || can('manageTransportRoutes') || can('viewTransportReports') || can('manageTransportNotifications') || can('sendTransportBroadcasts') || isAssignedToAnyRoute(VIEW.userId))? navItem('transportation','🚌','Transportation') : ''}
-          ${roleCanSeeTab(currentStaff().role,'notes')? navItem('notes','📝','Session Notes') : ''}
-          ${roleCanSeeTab(currentStaff().role,'lessonplans')? navItem('lessonplans','📚','Lesson Plans & Goals') : ''}
-          ${roleCanSeeTab(currentStaff().role,'teammeetings')? navItem('teammeetings','🗣️','Team Meetings') : ''}
           ${(currentStaff().role==='Admin' || can('accessLeadershipMeetings') || can('manageAdminMeetingGroups'))? navItem('leadershipmeetings','📋','Admin Meetings') : ''}
-          ${roleCanSeeTab(currentStaff().role,'printcenter')? navItem('printcenter','🖨️','Print &amp; Document Center') : ''}
-          ${roleCanSeeTab(currentStaff().role,'reports')? navItem('reports','📄','Reports & Assessments') : ''}
-          ${roleCanSeeTab(currentStaff().role,'search')? navItem('search','🔍','Search') : ''}
-          ${roleCanSeeTab(currentStaff().role,'messages')? navItem('messages','✉️','Messages', unreadMessageCount()) : ''}
-          ${roleCanSeeTab(currentStaff().role,'contacts')? navItem('contacts','☎️','Parent Contact Log') : ''}
-          ${can('viewOversight')? navItem('oversight','🔎','Oversight') : ''}
-          ${(currentStaff().role==='Admin' || can('manageHRIntake') || can('signBoardApprovals'))? navItem('hireapps','💼', can('manageHRIntake')||currentStaff().role==='Admin' ? 'New Hire Applications' : 'Sign as Board President') : ''}
-          ${(currentStaff().role==='Admin' || can('manageHRIntake') || can('approveOnboardingDocs'))? navItem('onboardingDocReview','📄','Document Review') : ''}
+          ${roleCanSeeTab(currentStaff().role,'attendance')? navItem('attendance','✔️','Attendance') : ''}
           ${(BACKEND_MODE && currentStaff().role==='Admin')? navItem('auditlog','🛡️','Audit Log') : ''}
+          ${(currentStaff().role==='Admin' || can('manageBilling') || can('printBillingSheets'))? navItem('billing','💳','Billing') : ''}
+          ${roleCanSeeTab(currentStaff().role,'calendar')? navItem('calendar','🌙','Calendar') : ''}
+          ${roleCanSeeTab(currentStaff().role,'setup')? navItem('setup','🏷️','Classes') : ''}
+          ${(currentStaff().role==='Admin' || can('manageHRIntake') || can('approveOnboardingDocs'))? navItem('onboardingDocReview','📄','Document Review') : ''}
+          ${(currentStaff().role==='Admin' || can('manageFamilies') || can('viewFamilies'))? navItem('families','👪','Families') : ''}
+          ${roleCanSeeTab(currentStaff().role,'lessonplans')? navItem('lessonplans','📚','Lesson Plans & Goals') : ''}
+          ${roleCanSeeTab(currentStaff().role,'messages')? navItem('messages','✉️','Messages', unreadMessageCount()) : ''}
+          ${(currentStaff().role==='Admin' || can('manageHRIntake') || can('signBoardApprovals'))? navItem('hireapps','💼', can('manageHRIntake')||currentStaff().role==='Admin' ? 'New Hire Applications' : 'Sign as Board President') : ''}
+          ${can('viewOversight')? navItem('oversight','🔎','Oversight') : ''}
+          ${roleCanSeeTab(currentStaff().role,'contacts')? navItem('contacts','☎️','Parent Contact Log') : ''}
+          ${roleCanSeeTab(currentStaff().role,'printcenter')? navItem('printcenter','🖨️','Print &amp; Document Center') : ''}
+          ${(currentStaff().role==='Admin' || can('manageRegistration') || can('viewRegistration'))? navItem('registration','📋','Registration') : ''}
+          ${roleCanSeeTab(currentStaff().role,'reports')? navItem('reports','📄','Reports & Assessments') : ''}
+          ${roleCanSeeTab(currentStaff().role,'schedule')? navItem('schedule','🗓️','Schedule') : ''}
+          ${roleCanSeeTab(currentStaff().role,'search')? navItem('search','🔍','Search') : ''}
           ${(currentStaff().role==='Admin' || can('editServiceDefaults') || can('editContactRules') || can('editLessonPlanRule') || can('manageTemplates') || can('editSchoolCalendar'))? navItem('servicereqs','🎯','Service Requirements') : ''}
+          ${roleCanSeeTab(currentStaff().role,'notes')? navItem('notes','📝','Session Notes') : ''}
+          ${roleCanSeeTab(currentStaff().role,'staff')? navItem('staff','🧑','Staff') : ''}
+          ${roleCanSeeTab(currentStaff().role,'students')? navItem('students','👦','Students') : ''}
+          ${roleCanSeeTab(currentStaff().role,'teammeetings')? navItem('teammeetings','🗣️','Team Meetings') : ''}
+          ${(currentStaff().role==='Admin' || can('manageTransportSetup') || can('manageTransportRoutes') || can('viewTransportReports') || can('manageTransportNotifications') || can('sendTransportBroadcasts') || isAssignedToAnyRoute(VIEW.userId))? navItem('transportation','🚌','Transportation') : ''}
           ${(currentStaff().role==='Admin' || can('managePermissions') || can('manageAccounts') || can('editSchoolInfo') || can('manageEmailSettings') || can('manageAbsencePolicy') || can('manageLobbyDisplay'))? navItem('settings','⚙️','Settings') : ''}
         </div>
         <div class="nav-foot">${BACKEND_MODE?`<span class="link" style="opacity:1;color:#fff;text-decoration:underline;" onclick="signOut()">⎋ Sign out</span>`:''}<div class="small" style="opacity:.55;margin-top:6px;color:#fff;">© 2026 by YSpangelet</div><div class="small" style="opacity:.4;color:#fff;">${LEDGER_VERSION}</div></div>
@@ -3808,7 +3811,7 @@ function goBackTab(){ const h = VIEW.tabHistory||[]; if(!h.length) return; VIEW.
 function tabTitle(){
   if(VIEW.tab==='hireapps' && !(currentStaff().role==='Admin' || can('manageHRIntake')) && can('signBoardApprovals')) return 'Sign as Board President';
   return {dashboard:'Dashboard', students:'Students', staff:'Staff', setup:'Classes', servicereqs:'Service Requirements', schedule:'Schedule', calendar:'Calendar', attendance:'Attendance',
-    notes:'Session Notes', lessonplans:'Lesson Plans & Goals', teammeetings:'Team Meetings', leadershipmeetings:'Admin Meetings', printcenter:'Print &amp; Document Center', reports:'Reports & Assessments', search:'Search', messages:'Messages', contacts:'Parent Contact Log', oversight:'Oversight', auditlog:'Audit Log', billing:'Billing', families:'Families', hireapps:'New Hire Applications', transportation:'Transportation', onboardingDocReview:'Document Review', settings:'Settings'}[VIEW.tab];
+    notes:'Session Notes', lessonplans:'Lesson Plans & Goals', teammeetings:'Team Meetings', leadershipmeetings:'Admin Meetings', printcenter:'Print &amp; Document Center', reports:'Reports & Assessments', search:'Search', messages:'Messages', contacts:'Parent Contact Log', oversight:'Oversight', auditlog:'Audit Log', billing:'Billing', families:'Families', registration:'Registration', hireapps:'New Hire Applications', transportation:'Transportation', onboardingDocReview:'Document Review', settings:'Settings'}[VIEW.tab];
 }
 // A pre-filled <input type="date"> fires its "change" event the instant whichever single
 // segment you're editing (month/day/year) becomes valid on its own — not when you're actually
@@ -3854,7 +3857,7 @@ function renderContent(){
   // a box scrolled to a totally different, wrong part of a screen scrolled well past the top.
   const savedWindowScrollY = preserveScroll ? window.scrollY : 0;
   const fns = {dashboard:renderDashboard, students:renderStudentProfileSection, staff:renderStaffProfileSection, setup:renderSetup, servicereqs:renderServiceRequirements, schedule:renderSchedule, calendar:renderSchoolCalendar, attendance:renderAttendance,
-    notes:renderNotes, lessonplans:renderLessonPlans, teammeetings:renderTeamMeetings, leadershipmeetings:renderLeadershipMeetings, printcenter:renderPrintCenter, reports:renderReports, search:renderSearch, messages:renderMessages, contacts:renderContacts, oversight:renderOversight, auditlog:renderAuditLog, billing:renderBilling, families:renderFamilies, hireapps:renderHireApplications, transportation:renderTransportation, onboardingDocReview:renderOnboardingDocReview, settings:renderSettings};
+    notes:renderNotes, lessonplans:renderLessonPlans, teammeetings:renderTeamMeetings, leadershipmeetings:renderLeadershipMeetings, printcenter:renderPrintCenter, reports:renderReports, search:renderSearch, messages:renderMessages, contacts:renderContacts, oversight:renderOversight, auditlog:renderAuditLog, billing:renderBilling, families:renderFamilies, registration:renderRegistration, hireapps:renderHireApplications, transportation:renderTransportation, onboardingDocReview:renderOnboardingDocReview, settings:renderSettings};
   try{
     c.innerHTML = fns[VIEW.tab]();
     afterRenderHooks[VIEW.tab] && afterRenderHooks[VIEW.tab]();
@@ -5352,29 +5355,22 @@ function printStaffRecord(staffId){
 // meant to choose (tuition tier, payment method) print as blank checkboxes for them to mark by
 // hand, matching the original paper form — this is a print-and-sign document, not a live
 // calculator, so nothing here is meant to auto-total.
-function printTuitionContract(anyStudentIdInFamily){
-  const anchor = byId(STATE.students, anyStudentIdInFamily);
-  if(!anchor){ toast('Could not find that student'); return; }
-  const family = familiesOfYear().find(f=>f.key===familyKeyForStudent(anchor));
-  if(!family){ toast('Could not find that family'); return; }
+function tuitionContractBodyHtml(family){
   const first = family.students[0];
   const address = [first.address, first.city, first.state, first.zip].filter(Boolean);
-  const familyDisplayName = studentParentSalutationFormal(first);
+  const familyDisplayName = registrationFamilyDisplayName(first);
   const cfg = STATE.tuitionContractConfig;
   const tierTypes = cfg.tierFeeTypeIds.map(id=>byId(STATE.tuitionFeeTypes,id)).filter(Boolean);
   const extraTypes = cfg.extraFeeTypeIds.map(id=>byId(STATE.tuitionFeeTypes,id)).filter(Boolean);
-  if(!tierTypes.length && !extraTypes.length){
-    toast('Set up your tuition pricing first — Settings → Tuition Contract Pricing');
-    return;
-  }
+  if(!tierTypes.length && !extraTypes.length) return null;
   const rowsHtml = family.students.map(s=>`
     <tr>
       <td style="padding:8px;border:1px solid #999;">${escapeHtml(s.name)}</td>
       <td style="padding:8px;border:1px solid #999;text-align:center;">${escapeHtml(className(s.classId))}</td>
       ${tierTypes.map(ft=>`<td style="padding:8px;border:1px solid #999;text-align:center;">☐ ${fmtMoney(ft.defaultAmount)}</td>`).join('')}
     </tr>`).join('');
-  const body = `
-    <div dir="rtl" style="text-align:center;font-weight:700;font-size:15pt;margin-bottom:2px;">שטר הסכם לשכר לימוד לשנת הלימודים תשפ"ז לפ"ק</div>
+  return `
+    <div dir="rtl" style="text-align:center;font-weight:700;font-size:15pt;margin-bottom:2px;">שטר הסכם לשכר לימוד לשנת הלימודים ${hebrewYearLabel(STATE.currentYear)} לפ"ק</div>
     <div style="text-align:center;font-weight:700;font-size:13pt;margin-bottom:18px;">Tuition Contract — School Year ${escapeHtml(STATE.currentYear)}</div>
     <div style="margin-bottom:16px;">
       <div><strong>Name:</strong> ${escapeHtml(familyDisplayName)}</div>
@@ -5405,17 +5401,35 @@ function printTuitionContract(anyStudentIdInFamily){
       <div style="flex:1;">Signature: _________________________</div>
       <div style="flex:1;">Date: _________________________</div>
     </div>`;
+}
+function printTuitionContract(anyStudentIdInFamily){
+  const anchor = byId(STATE.students, anyStudentIdInFamily);
+  if(!anchor){ toast('Could not find that student'); return; }
+  const family = familiesOfYear().find(f=>f.key===familyKeyForStudent(anchor));
+  if(!family){ toast('Could not find that family'); return; }
+  const body = tuitionContractBodyHtml(family);
+  if(!body){ toast('Set up your tuition pricing first — Settings → Tuition Contract Pricing'); return; }
+  const familyDisplayName = registrationFamilyDisplayName(family.students[0]);
   const win = window.open('', '_blank');
   win.document.write(letterheadHtml(body, `Tuition Contract — ${familyDisplayName}`, familyDisplayName));
   win.document.close();
 }
 function saveStudentFieldToggles(){
   if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
-  STATE.studentFieldToggles = { diagnosis: document.getElementById('sftDiagnosis').checked };
+  STATE.studentFieldToggles = {
+    diagnosis: document.getElementById('sftDiagnosis').checked,
+    yiddishNames: document.getElementById('sftYiddish').checked,
+    transportation: document.getElementById('sftTransportation').checked,
+    respiteSelfDirection: document.getElementById('sftRespite').checked,
+  };
+  // Same underlying flag the Dashboard & Reports Widgets screen uses for "Mandate compliance" —
+  // surfaced here too since it also controls a student-profile section, so someone doesn't need
+  // to hunt across two different settings screens to find where it lives.
+  STATE.dashboardComplianceWidgets.mandate = document.getElementById('sftMandate').checked;
   saveState(); renderContent(); toast('Saved');
 }
 function saveTuitionContractPricing(){
-  if(!(currentStaff().role==='Admin' || can('manageBilling'))){ toast('You do not have permission to edit this'); return; }
+  if(!canManageRegistration()){ toast('You do not have permission to edit this'); return; }
   STATE.tuitionContractConfig = {
     tierFeeTypeIds: [...document.querySelectorAll('.tcpTier:checked')].map(el=>el.value),
     extraFeeTypeIds: [...document.querySelectorAll('.tcpExtra:checked')].map(el=>el.value),
@@ -5423,7 +5437,7 @@ function saveTuitionContractPricing(){
   saveState(); toast('Tuition Contract pricing saved');
 }
 function saveRegistrationLetterText(){
-  if(!(currentStaff().role==='Admin' || can('editSchoolInfo'))){ toast('You do not have permission to edit this'); return; }
+  if(!canManageRegistration()){ toast('You do not have permission to edit this'); return; }
   STATE.registrationLetterText = document.getElementById('regLetterText').value;
   saveState(); toast('Registration letter saved');
 }
@@ -5442,13 +5456,9 @@ function saveDashboardComplianceWidgets(){
 // phone, allergies); anything the app doesn't track at all (emergency contacts, family doctor,
 // grandparents) prints as blank fields for the family to fill in by hand, same as the original
 // paper form — this is a print-and-return document, not a data-entry replacement.
-function printRegistrationLetter(anyStudentIdInFamily){
-  const anchor = byId(STATE.students, anyStudentIdInFamily);
-  if(!anchor){ toast('Could not find that student'); return; }
-  const family = familiesOfYear().find(f=>f.key===familyKeyForStudent(anchor));
-  if(!family){ toast('Could not find that family'); return; }
+function registrationPacketBodyHtml(family){
   const first = family.students[0];
-  const familyDisplayName = studentParentSalutationFormal(first);
+  const familyDisplayName = registrationFamilyDisplayName(first);
   const mo = first.mother||{}, fa = first.father||{};
   const letterBody = escapeHtml(STATE.registrationLetterText).replace(/\n/g,'<br>');
   const studentRowsHtml = family.students.map(s=>`
@@ -5457,7 +5467,7 @@ function printRegistrationLetter(anyStudentIdInFamily){
       <td style="padding:6px;border:1px solid #999;">${escapeHtml(className(s.classId))}</td>
       <td style="padding:6px;border:1px solid #999;">${s.dob?fmtDate(s.dob):''}</td>
     </tr>`).join('');
-  const body = `
+  return `
     <div dir="auto" style="margin-bottom:24px;line-height:1.6;">${letterBody}</div>
     <div style="page-break-before:always;">
       <h2 style="text-align:center;margin-top:0;">PARENT / STUDENT INFORMATION</h2>
@@ -5508,9 +5518,96 @@ function printRegistrationLetter(anyStudentIdInFamily){
         <div style="flex:1;">Date: _________________________</div>
       </div>
     </div>`;
+}
+function printRegistrationLetter(anyStudentIdInFamily){
+  const anchor = byId(STATE.students, anyStudentIdInFamily);
+  if(!anchor){ toast('Could not find that student'); return; }
+  const family = familiesOfYear().find(f=>f.key===familyKeyForStudent(anchor));
+  if(!family){ toast('Could not find that family'); return; }
+  const familyDisplayName = registrationFamilyDisplayName(family.students[0]);
   const win = window.open('', '_blank');
-  win.document.write(letterheadHtml(body, `Registration — ${familyDisplayName}`, familyDisplayName));
+  win.document.write(letterheadHtml(registrationPacketBodyHtml(family), `Registration — ${familyDisplayName}`, familyDisplayName));
   win.document.close();
+}
+// Combined Registration + Tuition Contract as ONE print job — same two documents as the separate
+// buttons, just concatenated with a page break between them so there's one thing to hand a
+// family (or one PDF to save) instead of two separate print actions.
+// Every family, back to back, each starting on its own page — one print job (and one PDF, if
+// saved that way) for the whole school's Registration + Tuition Contract paperwork at once,
+// instead of clicking through families one at a time.
+function printAllRegistrationsAndContracts(){
+  const families = familiesOfYear();
+  if(!families.length){ toast('No students in '+STATE.currentYear+' yet'); return; }
+  let missingContract = 0;
+  const combined = families.map((f,i)=>{
+    const contractBody = tuitionContractBodyHtml(f);
+    if(!contractBody) missingContract++;
+    const section = registrationPacketBodyHtml(f) + (contractBody ? `<div style="page-break-before:always;">${contractBody}</div>` : '');
+    return i===0 ? section : `<div style="page-break-before:always;">${section}</div>`;
+  }).join('');
+  if(missingContract) toast(`Tuition Contract skipped for ${missingContract} famil${missingContract===1?'y':'ies'} — set up Tuition Contract Pricing in Settings to include it for everyone`);
+  const win = window.open('', '_blank');
+  win.document.write(letterheadHtml(combined, `Registration & Tuition Contracts — ${STATE.currentYear} (${families.length} families)`));
+  win.document.close();
+}
+function printRegistrationAndContract(anyStudentIdInFamily){
+  const anchor = byId(STATE.students, anyStudentIdInFamily);
+  if(!anchor){ toast('Could not find that student'); return; }
+  const family = familiesOfYear().find(f=>f.key===familyKeyForStudent(anchor));
+  if(!family){ toast('Could not find that family'); return; }
+  const contractBody = tuitionContractBodyHtml(family);
+  const familyDisplayName = registrationFamilyDisplayName(family.students[0]);
+  const combined = registrationPacketBodyHtml(family) + (contractBody ? `<div style="page-break-before:always;">${contractBody}</div>` : '');
+  if(!contractBody) toast('Printing Registration only — set up Tuition Contract Pricing in Settings to include the contract too');
+  const win = window.open('', '_blank');
+  win.document.write(letterheadHtml(combined, `Registration & Tuition Contract — ${familyDisplayName}`, familyDisplayName));
+  win.document.close();
+}
+// Plain-text version for email — same pattern as tuitionStatementEmailText/emailTuitionStatement:
+// EmailJS sends plain text, not a rendered PDF attachment, so this is a readable summary a
+// family can act on (the letter's actual wording, plus what's still needed), not a fillable
+// digital copy of the form itself. The Emergency Contact/Medical/Grandparents sections are
+// blank-by-hand fields on the printed form with nothing to summarize, so they're intentionally
+// left out here rather than emailing a wall of empty labels.
+function registrationEmailText(family){
+  const first = family.students[0];
+  const names = family.students.map(s=>s.name).join(', ');
+  const mo = first.mother||{}, fa = first.father||{};
+  const contractBody = tuitionContractBodyHtml(family);
+  let text = `${STATE.registrationLetterText}\n\n---\n\nPARENT / STUDENT INFORMATION\n\nStudent(s): ${names}\n`;
+  if(fa.name) text += `Father: ${fa.name}${fa.cell?' · '+fa.cell:''}${fa.email?' · '+fa.email:''}\n`;
+  if(mo.name) text += `Mother: ${mo.name}${mo.cell?' · '+mo.cell:''}${mo.email?' · '+mo.email:''}\n`;
+  text += `\nPlease also complete and return: the Family/Student Information form (emergency contacts, medical information, and consent) — printed copies are available from the office — `;
+  text += contractBody ? `and sign the Tuition Contract.` : `and sign the Tuition Contract once it's ready.`;
+  return text;
+}
+async function emailRegistrationPacket(anyStudentIdInFamily){
+  const anchor = byId(STATE.students, anyStudentIdInFamily);
+  if(!anchor){ toast('Could not find that student'); return; }
+  const family = familiesOfYear().find(f=>f.key===familyKeyForStudent(anchor));
+  if(!family){ toast('Could not find that family'); return; }
+  const first = family.students[0];
+  if(!emailNotificationsReady()){ toast('Set up EmailJS in Settings → Email notifications first'); return; }
+  const contactsMap = new Map();
+  family.students.forEach(st=>studentParentEmails(st).forEach(c=>{
+    const key = normalizeEmailForMatch(c.email);
+    if(key && !contactsMap.has(key)) contactsMap.set(key, c);
+  }));
+  const contacts = [...contactsMap.values()];
+  const familyDisplayName = registrationFamilyDisplayName(first);
+  if(!contacts.length){ toast(`No parent email on file for ${familyDisplayName}`); return; }
+  ensureEmailjsInit();
+  const message = registrationEmailText(family);
+  let anySent = false;
+  for(const c of contacts){
+    try{
+      await emailjs.send(STATE.emailjsConfig.serviceId, STATE.emailjsConfig.templateId, {
+        to_email: c.email, to_name: c.label, subject: `Registration — ${familyDisplayName}`, message, school_name: STATE.schoolName,
+      });
+      anySent = true;
+    }catch(e){ console.error('Registration email failed:', e); }
+  }
+  toast(anySent? `✓ Registration emailed to ${familyDisplayName}` : `Could not email ${familyDisplayName} — check your EmailJS setup`);
 }
 function printGoals(studentId){
   const student = byId(STATE.students, studentId);
@@ -7525,7 +7622,7 @@ function openStudentModal(id){
     <h3>${id?'Edit':'Add'} student</h3>
     <div class="form-cols"><div class="form-row"><label>Full name</label><input id="mName" value="${escapeHtml(s.name)}"></div>
     <div class="form-row"><label>Date of birth</label><input id="mDob" type="date" value="${s.dob||''}" onchange="updateHebrewDobPreview()"><div id="mDobHebrew" class="small muted" style="margin-top:4px;"></div></div></div>
-    <div class="form-row" style="margin-bottom:6px;">
+    ${STATE.studentFieldToggles.yiddishNames!==false ? `<div class="form-row" style="margin-bottom:6px;">
       <label style="cursor:pointer;" onclick="VIEW.yiddishNamesExpanded=!VIEW.yiddishNamesExpanded;document.getElementById('yiddishNamesWrap').style.display=VIEW.yiddishNamesExpanded?'block':'none';document.getElementById('yiddishNamesToggle').textContent=VIEW.yiddishNamesExpanded?'▾':'▸';"><span id="yiddishNamesToggle">${(VIEW.yiddishNamesExpanded||s.yiddishName||s.yiddishLastName||mo.yiddishName||fa.yiddishName)?'▾':'▸'}</span> Yiddish names <span class="small muted">(optional)</span></label>
       <div id="yiddishNamesWrap" style="display:${(VIEW.yiddishNamesExpanded||s.yiddishName||s.yiddishLastName||mo.yiddishName||fa.yiddishName)?'block':'none'};background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-top:4px;">
         <button type="button" class="btn-ghost btn btn-sm btn-ai" style="margin-bottom:8px;" onclick="suggestYiddishNames()">✨ Suggest with AI</button>
@@ -7539,7 +7636,7 @@ function openStudentModal(id){
         </div>
         <div class="small muted">The last name is shared for the whole family and used with the student's, mother's, and father's first names above. Used on Mailing Labels & Envelopes when "Use Yiddish names" is checked there — falls back to the regular English name for anyone left blank here. "✨ Suggest with AI" fills in its best guess for whichever of these fields are still empty, based on the English names already typed above — it's a starting guess, not authoritative (the same English name often has more than one real Yiddish spelling), so double-check and correct anything it gets wrong before saving.</div>
       </div>
-    </div>
+    </div>` : ''}
     ${STATE.studentFieldToggles.diagnosis!==false ? `<div class="form-row"><label>Diagnosis</label>
       <select id="mDiagSelect" onchange="document.getElementById('mDiagOtherWrap').style.display=this.value==='Other'?'block':'none';">
         <option value="" ${!s.diagnosis?'selected':''}>— none —</option>
@@ -7622,7 +7719,7 @@ function openStudentModal(id){
         </div>
       </div>
     </div>
-    ${(currentStaff().role==='Admin' || can('manageTransportSetup'))? `<div class="form-row" style="background:var(--surface-2);border-radius:8px;padding:12px;">
+    ${((currentStaff().role==='Admin' || can('manageTransportSetup')) && STATE.studentFieldToggles.transportation!==false)? `<div class="form-row" style="background:var(--surface-2);border-radius:8px;padding:12px;">
       <label style="font-weight:400;display:flex;align-items:center;gap:6px;margin-bottom:8px;"><input type="checkbox" id="mUsesTransportation" ${s.usesTransportation!==false?'checked':''} onchange="document.getElementById('mTransportStopWrap').style.display=this.checked?'block':'none'"> Rides school transportation</label>
       <div id="mTransportStopWrap" style="display:${s.usesTransportation!==false?'block':'none'};">
         <div class="small muted" style="margin-bottom:4px;">Assigned stop <span class="small">(used for both the morning pickup and afternoon drop-off route, unless overridden on a specific route)</span></div>
@@ -7660,7 +7757,7 @@ function openStudentModal(id){
         </div>
       </div>
     </div>` : ''}
-    ${can('manageBilling')? `<div class="form-row" style="background:var(--surface-2);border-radius:8px;padding:12px;">
+    ${(can('manageBilling') && STATE.studentFieldToggles.respiteSelfDirection!==false)? `<div class="form-row" style="background:var(--surface-2);border-radius:8px;padding:12px;">
       <label>Respite / Self-Direction billing <span class="small">(only visible to roles with billing access)</span></label>
       <div class="form-cols" style="margin-bottom:8px;">
         <div>
@@ -7697,8 +7794,10 @@ function saveStudent(id){
   // answer forward onto the record for display later (their profile, printed documents, etc.)
   // instead of it only ever existing as a fleeting label inside the edit modal.
   { const hbEl = document.getElementById('mDobHebrew'); s.hebrewDob = (hbEl && hbEl.dataset.hebrew && hbEl.dataset.dobFor===s.dob) ? hbEl.dataset.hebrew : (s.dob? s.hebrewDob : ''); }
-  s.yiddishName = document.getElementById('mYiddishName').value.trim();
-  s.yiddishLastName = document.getElementById('mYiddishLastName').value.trim();
+  if(document.getElementById('mYiddishName')){
+    s.yiddishName = document.getElementById('mYiddishName').value.trim();
+    s.yiddishLastName = document.getElementById('mYiddishLastName').value.trim();
+  }
   if(document.getElementById('mDiagSelect')){ const diagSel = document.getElementById('mDiagSelect').value; s.diagnosis = diagSel==='Other' ? document.getElementById('mDiagOther').value.trim() : diagSel; }
   s.allergies = document.getElementById('mAllergies').value.trim();
   s.studentIdNumber = document.getElementById('mStudentIdNumber').value.trim();
@@ -7718,8 +7817,8 @@ function saveStudent(id){
   }
   s.goals = s.goals||[];
   s.parent = { name: document.getElementById('mParentName').value.trim(), phone: document.getElementById('mParentPhone').value.trim(), email: document.getElementById('mParentEmail').value.trim(), canText: parseCanText(document.getElementById('mParentCanText').value) };
-  s.mother = { name: document.getElementById('mMotherName').value.trim(), yiddishName: document.getElementById('mMotherYiddishName').value.trim(), cell: document.getElementById('mMotherCell').value.trim(), email: document.getElementById('mMotherEmail').value.trim(), canText: parseCanText(document.getElementById('mMotherCanText').value) };
-  s.father = { name: document.getElementById('mFatherName').value.trim(), yiddishName: document.getElementById('mFatherYiddishName').value.trim(), cell: document.getElementById('mFatherCell').value.trim(), email: document.getElementById('mFatherEmail').value.trim(), canText: parseCanText(document.getElementById('mFatherCanText').value) };
+  s.mother = { name: document.getElementById('mMotherName').value.trim(), yiddishName: document.getElementById('mMotherYiddishName') ? document.getElementById('mMotherYiddishName').value.trim() : ((s.mother&&s.mother.yiddishName)||''), cell: document.getElementById('mMotherCell').value.trim(), email: document.getElementById('mMotherEmail').value.trim(), canText: parseCanText(document.getElementById('mMotherCanText').value) };
+  s.father = { name: document.getElementById('mFatherName').value.trim(), yiddishName: document.getElementById('mFatherYiddishName') ? document.getElementById('mFatherYiddishName').value.trim() : ((s.father&&s.father.yiddishName)||''), cell: document.getElementById('mFatherCell').value.trim(), email: document.getElementById('mFatherEmail').value.trim(), canText: parseCanText(document.getElementById('mFatherCanText').value) };
   s.contactPref = { person: document.getElementById('mBestContactPerson').value, method: document.getElementById('mBestContactMethod').value };
   s.homePhone = document.getElementById('mHomePhone').value.trim();
   if(document.getElementById('mRespiteType')){
@@ -11979,6 +12078,47 @@ function studentParentSalutationFormal(student){
   if(hasMother) return `Mrs. ${lastName}`;
   return `Parent/Guardian of ${student.name||''}`;
 }
+// For the Registration packet and Tuition Contract specifically — these are printed FORMS, not
+// addressed letters, so "Parent/Guardian of [Student]" in the "Name:" field reads like an error
+// rather than a normal fallback. When no parent name is on file at all, "[LastName] Family" (or
+// blank, if there's truly no name anywhere) is a more form-appropriate placeholder than reusing
+// the letter-salutation fallback verbatim — this intentionally does NOT change
+// studentParentSalutationFormal itself, since actual letters/statements still want that phrasing.
+// Converts a number 1-999 into Hebrew year letters with a gershayim before the last letter (e.g.
+// 787 -> תשפ"ז) — standard year-abbreviation style, dropping the thousands digit the way a
+// Hebrew year is conventionally written short-form (see hebrewYearLabel below, which is the
+// actual entry point most callers want).
+function hebrewYearGematria(num){
+  const hundreds = ['','ק','ר','ש','ת','תק','תר','תש','תת','תתק'];
+  const tens = ['','י','כ','ל','מ','נ','ס','ע','פ','צ'];
+  const ones = ['','א','ב','ג','ד','ה','ו','ז','ח','ט'];
+  const h = Math.floor(num/100), t = Math.floor((num%100)/10), o = num%10;
+  let str = hundreds[h]||'';
+  // 15 and 16 are traditionally written ט"ו/ט"ז rather than the literal letter-value combination
+  // (י"ה/י"ו), since those would spell an abbreviation of God's name.
+  if(t===1 && o===5) str += 'טו';
+  else if(t===1 && o===6) str += 'טז';
+  else str += (tens[t]||'') + (ones[o]||'');
+  if(str.length<=1) return str + "'";
+  return str.slice(0,-1) + '"' + str.slice(-1);
+}
+// Turns a school year string like "2026-2027" into its Hebrew year in letters (e.g. "תשפ"ז") —
+// used so the Tuition Contract's Hebrew header updates automatically with whichever Academic
+// Year is selected, instead of a year hardcoded in the template. Rosh Hashana for the Hebrew year
+// matching a school year starting in Gregorian year Y always falls in Y's Sept/Oct (well before
+// the school year itself gets underway), so the whole school year safely falls within ONE Hebrew
+// year — no per-date lookup needed, just Y + 3761.
+function hebrewYearLabel(schoolYearStr){
+  const startYear = parseInt(String(schoolYearStr||'').split('-')[0], 10);
+  if(!startYear) return '';
+  return hebrewYearGematria((startYear + 3761) % 1000);
+}
+function registrationFamilyDisplayName(student){
+  const hasMother = !!(student.mother&&student.mother.name), hasFather = !!(student.father&&student.father.name);
+  if(hasMother || hasFather) return studentParentSalutationFormal(student);
+  const lastName = studentFamilyLastName(student);
+  return lastName ? `${lastName} Family` : '';
+}
 // The addressee line for a mailed letter — same pairing Mailing Labels & Envelopes uses
 // (mailingRecipientLine, further down) so the two stay consistent: both parents' full names
 // joined with "&" when both are on file, or the same "Parent/Guardian of [Student]" fallback.
@@ -13171,19 +13311,6 @@ function renderPrintCenter(){
   // needs the usual scope select.
   const showGenericScope = !(isGroupActivities && VIEW.pcScheduleBy!=='class');
   return `
-  <div class="card" style="max-width:620px;margin-bottom:18px;">
-    <h3>📝 Registration &amp; Tuition</h3>
-    <div class="muted small" style="margin-bottom:12px;">One tuition contract per family, with a row for every child rather than a fixed two-child form. Families are grouped by matching parent names and address — a student with nothing on file yet prints as its own single-child family.</div>
-    ${familiesOfYear().length ? `<div style="max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;">
-      ${familiesOfYear().map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);">
-        <div><strong>${escapeHtml(f.lastName||'(no last name on file)')}</strong> <span class="muted small">— ${f.students.length} ${f.students.length===1?'child':'children'} (${f.students.map(s=>escapeHtml(s.name)).join(', ')})</span></div>
-        <div style="display:flex;gap:6px;">
-          <button class="btn-ghost btn btn-sm" onclick="printRegistrationLetter('${f.students[0].id}')">🖨 Registration</button>
-          <button class="btn-ghost btn btn-sm" onclick="printTuitionContract('${f.students[0].id}')">🖨 Tuition Contract</button>
-        </div>
-      </div>`).join('')}
-    </div>` : `<div class="muted small">No students in ${escapeHtml(STATE.currentYear)} yet.</div>`}
-  </div>
   <div class="card" style="max-width:620px;">
     <h3>Print &amp; Document Center</h3>
     <div class="muted small" style="margin-bottom:14px;">Print records across one or many ${scopeLabel.toLowerCase()} at once${(isSchedule||isFullSchedule||isGroupActivities||isRoster)?'':', filtered by type and date'} — only includes records you already have access to.</div>
@@ -14078,8 +14205,7 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
           font-family: -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
           font-size: 8.5pt;
           color: #655C6D;
-        }` : '';
-  // The school's address/phone, via the SAME @page margin-box mechanism as the page-number
+        }` : '';  // The school's address/phone, via the SAME @page margin-box mechanism as the page-number
   // counter above — this used to be a separate position:fixed on-screen footer that fell back to
   // position:static (i.e. flowing right after wherever the content happened to end) in print,
   // because a truly fixed element only reliably paints once on a multi-page document and was
@@ -14096,6 +14222,22 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
           font-size: 8.5pt;
           color: #76154A;
         }` : '';
+  // A repeating header on pages 2+ — page 1 already gets the full logo baked directly into the
+  // body content just below, so this ONLY needs to appear starting from page 2 (via the
+  // "@page :first" override below, the standard CSS Paged Media way to vary just the first
+  // page's margin boxes) — otherwise a multi-page document reads as headerless past page 1,
+  // and a page separated from the rest of the printout has nothing identifying it at a glance.
+  // Text rather than the logo image itself: the exact same margin-box mechanism as the footer
+  // below, already confirmed working in the same browsers, without the added cross-browser risk
+  // of sizing/positioning an <img> inside a CSS margin box.
+  const topHeaderCss = brandName ? `
+        @top-center {
+          content: "${cssContentEscape(brandName)}";
+          font-family: Georgia,'Times New Roman',serif;
+          font-weight: 700;
+          font-size: 10.5pt;
+          color: #500F32;
+        }` : '';
   // No external font <link> — pop-up windows populated via document.write() are unreliable at
   // loading external stylesheets (Safari especially will just drop it silently), which is what
   // was producing the ugly fallback-serif look. Using a solid system-font stack instead means
@@ -14103,26 +14245,36 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
   return `<html><head><meta charset="UTF-8"><title>${escapeHtml(docTitle)} — ${escapeHtml(brandName)}</title>
     <style>
       @page {
-        margin: 0.55in;
-        /* Page numbers (and, when provided, the repeating identifying-info line) via CSS page
-           margin boxes — native support landed in Chrome 131 (Nov 2024) and Safari 18.2 (Dec
-           2024), so this renders correctly for most people printing or "Save as PDF"-ing from
-           this app. Firefox hasn't shipped support for this part of the spec as of early 2026
-           (tracked in Mozilla bug 1854974); on Firefox these boxes are simply blank rather than
-           broken, and the browser's own "Headers and footers" print option is the fallback there. */
+        margin: 0.85in 0.55in 0.55in 0.55in;
+        /* Page numbers (and, when provided, the repeating identifying-info line and header) via
+           CSS page margin boxes — native support landed in Chrome 131 (Nov 2024) and Safari 18.2
+           (Dec 2024), so this renders correctly for most people printing or "Save as PDF"-ing
+           from this app. Firefox hasn't shipped support for this part of the spec as of early
+           2026 (tracked in Mozilla bug 1854974); on Firefox these boxes are simply blank rather
+           than broken, and the browser's own "Headers and footers" print option is the fallback
+           there. The extra top margin (0.85in vs 0.55in elsewhere) is deliberately reserved space
+           for topHeaderCss below, not a stray gap — without it the running header would overlap
+           the first line of actual content on every page it appears on. */
         @bottom-right {
           content: "Page " counter(page) " of " counter(pages);
           font-family: -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
           font-size: 9pt;
           color: #655C6D;
-        }${pageFooterCss}${addressFooterCss}
+        }${pageFooterCss}${addressFooterCss}${topHeaderCss}
+      }
+      /* Page 1 already has the full logo baked into the body content just below (see
+         letterheadHeaderHtml) — this removes ONLY the running text header (and gives page 1 back
+         its normal, smaller top margin) so it doesn't show twice in a row on the very first page. */
+      @page :first {
+        margin-top: 0.55in;
+        @top-center { content: none; }
       }
       body{font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#2A2130;margin:0;padding-bottom:70px;}
       .lh-toolbar{position:sticky;top:0;background:#232E29;color:#fff;padding:10px 16px;display:flex;justify-content:flex-end;gap:10px;z-index:100;}
       .lh-toolbar button{font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:600;border-radius:8px;padding:8px 16px;cursor:pointer;border:none;}
       .lh-toolbar .lh-print-btn{background:#76154A;color:#fff;}
       .lh-toolbar .lh-close-btn{background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.4) !important;}
-      .lh-header{text-align:center;padding:6px 0 14px;}
+      .lh-header{text-align:center;padding:0 0 10px;}
       .lh-header img{height:64px;}
       .lh-title{font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:21px;text-align:center;color:#500F32;border-top:2px solid #76154A;border-bottom:2px solid #76154A;padding:8px 0;margin-bottom:18px;}
       .lh-meta{color:#655C6D;margin-bottom:18px;font-size:13px;text-align:center;}
@@ -16629,8 +16781,6 @@ function renderSettings(){
   if(canPaymentProcessor) sections.push({key:'paymentprocessor', label:'Payment Processor'});
   if(isAdmin) sections.push({key:'compliancesched', label:'Compliance Report Schedule'});
   if(isAdmin) sections.push({key:'studentfields', label:'Student Profile Fields'});
-  if(isAdmin || can('manageBilling')) sections.push({key:'tuitioncontractpricing', label:'Tuition Contract Pricing'});
-  if(isAdmin || canSchoolInfo) sections.push({key:'registrationletter', label:'Registration Letter'});
   if(isAdmin) sections.push({key:'dashboardwidgets', label:'Dashboard & Reports Widgets'});
   if(isAdmin && BACKEND_MODE) sections.push({key:'testdata', label:'Test Mode Data'});
   if(isAdmin) sections.push({key:'branches', label:'Branches'});
@@ -16878,30 +17028,13 @@ function renderSettings(){
 
     studentfields: `<div class="card">
       <h3>🧾 Student Profile Fields</h3>
-      <div class="muted small" style="margin-bottom:12px;">Turn off fields this school doesn't track — removes the field from every student's profile (so no one can enter new data in it) and hides any existing value from the profile header and the printed Full Record. Nothing already saved gets deleted; it's just hidden, and comes right back if you turn it back on.</div>
+      <div class="muted small" style="margin-bottom:12px;">Turn off sections this school doesn't use — removes them from every student's profile (so no one can enter new data there) and hides any existing value from profile headers and printed documents. Nothing already saved gets deleted; it's just hidden, and comes right back if you turn it back on.</div>
       <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="sftDiagnosis" ${STATE.studentFieldToggles.diagnosis!==false?'checked':''}> Diagnosis</label>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="sftYiddish" ${STATE.studentFieldToggles.yiddishNames!==false?'checked':''}> Yiddish names</label>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="sftTransportation" ${STATE.studentFieldToggles.transportation!==false?'checked':''}> Transportation <span class="small muted">(the per-student "Rides school transportation" section)</span></label>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="sftRespite" ${STATE.studentFieldToggles.respiteSelfDirection!==false?'checked':''}> Respite / Self-Direction billing</label>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;"><input type="checkbox" id="sftMandate" ${STATE.dashboardComplianceWidgets.mandate!==false?'checked':''}> OT/PT/SLP scheduling limits &amp; service minutes <span class="small muted">(same switch as the Dashboard's Mandate compliance widget — see Dashboard &amp; Reports Widgets)</span></label>
       <button class="btn" onclick="saveStudentFieldToggles()">Save</button>
-    </div>`,
-
-    tuitioncontractpricing: `<div class="card">
-      <h3>💲 Tuition Contract Pricing</h3>
-      <div class="muted small" style="margin-bottom:12px;">Which fee types show on the printed Tuition Contract, and how. Names and dollar amounts come from your existing fee type catalog — Billing → "⚙ Manage fee types" — so update the price there and it updates here automatically. If your list below is empty, set up fee types there first.</div>
-      <h4 style="margin-bottom:4px;">Tuition tier options <span class="small muted" style="font-weight:400;">(shown as a checkbox per child, e.g. different tuition levels)</span></h4>
-      <div style="margin-bottom:14px;">
-        ${STATE.tuitionFeeTypes.length? STATE.tuitionFeeTypes.map(ft=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:4px;"><input type="checkbox" class="tcpTier" value="${ft.id}" ${STATE.tuitionContractConfig.tierFeeTypeIds.includes(ft.id)?'checked':''}> ${escapeHtml(ft.name)} — ${fmtMoney(ft.defaultAmount)}</label>`).join('') : '<div class="muted small">No fee types set up yet.</div>'}
-      </div>
-      <h4 style="margin-bottom:4px;">Additional fees <span class="small muted" style="font-weight:400;">(one flat line per family, e.g. Registration Fee)</span></h4>
-      <div style="margin-bottom:14px;">
-        ${STATE.tuitionFeeTypes.length? STATE.tuitionFeeTypes.map(ft=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:4px;"><input type="checkbox" class="tcpExtra" value="${ft.id}" ${STATE.tuitionContractConfig.extraFeeTypeIds.includes(ft.id)?'checked':''}> ${escapeHtml(ft.name)} — ${fmtMoney(ft.defaultAmount)}</label>`).join('') : '<div class="muted small">No fee types set up yet.</div>'}
-      </div>
-      <button class="btn" onclick="saveTuitionContractPricing()">Save</button>
-    </div>`,
-
-    registrationletter: `<div class="card">
-      <h3>📝 Registration Letter</h3>
-      <div class="muted small" style="margin-bottom:12px;">The cover letter printed as page 1 of the Registration packet. This is your own editable text — update it for a new academic year (Hebrew date, requirements, wording) any time, right here, with no code change needed. Supports Hebrew/Yiddish text directly.</div>
-      <div class="form-row"><textarea id="regLetterText" dir="auto" rows="16" style="font-family:inherit;font-size:14px;line-height:1.5;">${escapeHtml(STATE.registrationLetterText)}</textarea></div>
-      <button class="btn" onclick="saveRegistrationLetterText()">Save</button>
     </div>`,
 
     branches: `<div class="card">
@@ -17443,6 +17576,71 @@ function saveManualFamily(){
   STATE.families.push({id: uid('fam'), label:'', studentIdNumbers: ids, combinedStatement:false});
   closeModal(); saveState(); renderContent();
   toast('Family linked');
+}
+function canManageRegistration(){ return currentStaff().role==='Admin' || can('manageRegistration'); }
+function canViewRegistration(){ return canManageRegistration() || can('viewRegistration'); }
+// Everything that touches Registration used to be spread across three places (Settings → the
+// letter text, Settings → tuition pricing, Print & Document Center → the family print/email
+// list) — someone running Registration day-to-day needed a mix of permissions across three
+// unrelated screens just to do their whole job. One tab, one permission pair (manage vs.
+// view-only), pill sub-tabs for the three pieces instead of three separate settings entries.
+function renderRegistrationFamilies(editable){
+  const families = familiesOfYear();
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <h3 style="margin:0;">Families</h3>
+      ${families.length ? `<button class="btn-ghost btn btn-sm" onclick="printAllRegistrationsAndContracts()">🖨 Print all (${families.length} families)</button>` : ''}
+    </div>
+    <div class="muted small" style="margin:8px 0 12px;">One tuition contract per family, with a row for every child rather than a fixed two-child form. Families are grouped by matching parent names and address — a student with nothing on file yet prints as its own single-child family.</div>
+    ${families.length ? `<div style="max-height:420px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;">
+      ${families.map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);">
+        <div><strong>${escapeHtml(f.lastName||'(no last name on file)')}</strong> <span class="muted small">— ${f.students.length} ${f.students.length===1?'child':'children'} (${f.students.map(s=>escapeHtml(s.name)).join(', ')})</span></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn-ghost btn btn-sm" onclick="printRegistrationLetter('${f.students[0].id}')">🖨 Registration</button>
+          <button class="btn-ghost btn btn-sm" onclick="printTuitionContract('${f.students[0].id}')">🖨 Tuition Contract</button>
+          <button class="btn-ghost btn btn-sm" onclick="printRegistrationAndContract('${f.students[0].id}')">🖨 Both, combined</button>
+          ${editable && emailNotificationsReady()? `<button class="btn-ghost btn btn-sm" onclick="emailRegistrationPacket('${f.students[0].id}')">✉ Email Registration</button>` : ''}
+        </div>
+      </div>`).join('')}
+    </div>` : `<div class="muted small">No students in ${escapeHtml(STATE.currentYear)} yet.</div>`}
+  </div>`;
+}
+function renderRegistrationLetterEditor(){
+  return `<div class="card">
+    <h3>📝 Registration Letter</h3>
+    <div class="muted small" style="margin-bottom:12px;">The cover letter printed as page 1 of the Registration packet. Editable text — update it for a new academic year (Hebrew date, requirements, wording) any time, right here, no code change needed. Supports Hebrew/Yiddish text directly.</div>
+    <div class="form-row"><textarea id="regLetterText" dir="auto" rows="16" style="font-family:inherit;font-size:14px;line-height:1.5;">${escapeHtml(STATE.registrationLetterText)}</textarea></div>
+    <button class="btn" onclick="saveRegistrationLetterText()">Save</button>
+  </div>`;
+}
+function renderRegistrationPricing(){
+  return `<div class="card">
+    <h3>💲 Tuition Contract Pricing</h3>
+    <div class="muted small" style="margin-bottom:12px;">Which fee types show on the printed Tuition Contract, and how. Names and dollar amounts come from your existing fee type catalog — Billing → "⚙ Manage fee types" — so update the price there and it updates here automatically. If your list below is empty, set up fee types there first.</div>
+    <h4 style="margin-bottom:4px;">Tuition tier options <span class="small muted" style="font-weight:400;">(shown as a checkbox per child, e.g. different tuition levels)</span></h4>
+    <div style="margin-bottom:14px;">
+      ${STATE.tuitionFeeTypes.length? STATE.tuitionFeeTypes.map(ft=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:4px;"><input type="checkbox" class="tcpTier" value="${ft.id}" ${STATE.tuitionContractConfig.tierFeeTypeIds.includes(ft.id)?'checked':''}> ${escapeHtml(ft.name)} — ${fmtMoney(ft.defaultAmount)}</label>`).join('') : '<div class="muted small">No fee types set up yet.</div>'}
+    </div>
+    <h4 style="margin-bottom:4px;">Additional fees <span class="small muted" style="font-weight:400;">(one flat line per family, e.g. Registration Fee)</span></h4>
+    <div style="margin-bottom:14px;">
+      ${STATE.tuitionFeeTypes.length? STATE.tuitionFeeTypes.map(ft=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:4px;"><input type="checkbox" class="tcpExtra" value="${ft.id}" ${STATE.tuitionContractConfig.extraFeeTypeIds.includes(ft.id)?'checked':''}> ${escapeHtml(ft.name)} — ${fmtMoney(ft.defaultAmount)}</label>`).join('') : '<div class="muted small">No fee types set up yet.</div>'}
+    </div>
+    <button class="btn" onclick="saveTuitionContractPricing()">Save</button>
+  </div>`;
+}
+function renderRegistration(){
+  if(!canViewRegistration()) return `<div class="empty-state">You don't have permission to view Registration. Ask an Admin to grant "View the Registration tab" or "Manage Registration" in Settings → Roles &amp; Permissions.</div>`;
+  const editable = canManageRegistration();
+  const tab = VIEW.registrationTab || 'families';
+  const tabs = [['families','Families'], ['letter','Registration Letter'], ['pricing','Tuition Contract Pricing']];
+  return `<h2 style="margin-top:0;">📋 Registration</h2>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;">
+    ${tabs.map(([key,label])=>`<button class="settings-pill ${tab===key?'active':''}" onclick="VIEW.registrationTab='${key}';renderContent();">${escapeHtml(label)}</button>`).join('')}
+  </div>
+  ${tab==='families' ? renderRegistrationFamilies(editable)
+    : (!editable) ? `<div class="empty-state">Editing the letter and pricing requires "Manage Registration" — ask an Admin.</div>`
+    : tab==='letter' ? renderRegistrationLetterEditor()
+    : renderRegistrationPricing()}`;
 }
 function renderFamilies(){
   if(!canViewFamilies()) return `<div class="empty-state">You don't have permission to view Families/Parents. Ask an Admin to grant "View the Families/Parents directory" in Settings → Roles & Permissions.</div>`;
