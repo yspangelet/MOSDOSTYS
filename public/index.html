@@ -1382,6 +1382,17 @@ function migrateState(){
   // extend the Medicaid-billing data shapes to also mean something totally different.
   STATE.tuitionFeeTypes = STATE.tuitionFeeTypes || []; // [{id, name, defaultAmount, frequency:'monthly'|'oneTime'|'yearly'}]
   STATE.tuitionPayments = STATE.tuitionPayments || []; // [{id, studentId, date, amount, method, note, recordedBy, recordedAt}]
+  // Fundraising — a separate module from tuition/Billing above: donors giving money to the
+  // school by choice (a gala, a building campaign, a general annual appeal), not families paying
+  // what they owe. Kept as its own set of records rather than folded into billing/students, since
+  // a donor is very often not a parent at all (an alum, a grandparent, a local business, a
+  // foundation) and a pledge/donation has a fundamentally different shape than a tuition charge —
+  // it's a promise or a gift, not something owed.
+  STATE.fundraisingFunds = STATE.fundraisingFunds || []; // [{id, name, description, goalAmount, active, createdAt}]
+  STATE.fundraisingCampaigns = STATE.fundraisingCampaigns || []; // [{id, name, fundId, goalAmount, startDate, endDate, description, active, createdAt}]
+  STATE.donors = STATE.donors || []; // [{id, prefix, name, yiddishName, type:'individual'|'organization'|'foundation', email, phone, address, dob, hebrewDob, notes, tags:[], createdAt}]
+  STATE.pledges = STATE.pledges || []; // [{id, donorId, campaignId, fundId, amount, pledgeDate, status:'active'|'fulfilled'|'cancelled', notes, createdBy, createdAt}]
+  STATE.donations = STATE.donations || []; // [{id, donorId, campaignId, fundId, pledgeId, amount, date, method, receiptSent, notes, recordedBy, recordedAt}]
   STATE.approversByDiscipline = STATE.approversByDiscipline || { OT:'', PT:'', SLP:'', ED:'' };
   STATE.lessonPlanApprover = STATE.lessonPlanApprover || '';
   STATE.studentDocuments = STATE.studentDocuments || [];
@@ -3071,6 +3082,8 @@ const PERMISSION_DEFS = [
   {key:'printBillingSheets', label:'Print Respite/billing sheets &amp; invoices (without seeing rates or $ summaries)', category:'Billing'},
   {key:'manageFamilies', label:'Manage Families/Parents — confirm sibling groupings, edit family labels, choose combined vs. separate tuition statements', category:'Families'},
   {key:'viewFamilies', label:'View the Families/Parents directory, read-only (no linking/unlinking or changing statement grouping)', category:'Families'},
+  {key:'manageFundraising', label:'Manage Fundraising — Funds, Campaigns, Donors, Pledges &amp; Donations', category:'Fundraising'},
+  {key:'viewFundraisingReports', label:'View the Fundraising dashboard, read-only (no adding/editing donors, pledges, or donations)', category:'Fundraising'},
   {key:'manageRegistration', label:'Manage Registration — requirements, stages, per-student checklist/documents/AI-check, the letter text, tuition pricing, and print/email', category:'Registration'},
   {key:'viewRegistration', label:'View the Registration tab, read-only (students/report/print/email only — no editing requirements, stages, the letter, or pricing)', category:'Registration'},
   {key:'manageHRIntake', label:'Manage new hire applications &amp; staff documents (School only) — includes SSN, pay info &amp; uploaded personnel files', category:'HR / Staff Intake'},
@@ -3087,7 +3100,7 @@ const PERMISSION_DEFS = [
   {key:'sendTransportBroadcasts', label:'Send broadcast messages/calls to parents about transportation (a route, a Custom Route, or everyone) — separate from route-editing or report-viewing, since this reaches real people\'s phones', category:'Transportation'},
 ];
 // Grouped once, in a fixed category order, for the redesigned matrix below.
-const PERMISSION_CATEGORY_ORDER = ['Daily editing','Deleting things','Reports & templates','Oversight & visibility','School configuration','Accounts & security','Meetings & communication','Billing','Families','Registration','HR / Staff Intake','Transportation'];
+const PERMISSION_CATEGORY_ORDER = ['Daily editing','Deleting things','Reports & templates','Oversight & visibility','School configuration','Accounts & security','Meetings & communication','Billing','Fundraising','Families','Registration','HR / Staff Intake','Transportation'];
 function permissionDefsByCategory(){
   return PERMISSION_CATEGORY_ORDER.map(cat=>({ name:cat, items: PERMISSION_DEFS.filter(p=>p.category===cat) })).filter(g=>g.items.length);
 }
@@ -3140,6 +3153,7 @@ function defaultVisibleTabFor(){
     ['calendar', ()=>roleCanSeeTab(role,'calendar')],
     ['attendance', ()=>roleCanSeeTab(role,'attendance')],
     ['billing', ()=>role==='Admin'||can('manageBilling')||can('printBillingSheets')],
+    ['fundraising', ()=>role==='Admin'||can('manageFundraising')||can('viewFundraisingReports')],
     ['transportation', ()=>role==='Admin'||can('manageTransportSetup')||can('manageTransportRoutes')||can('viewTransportReports')||can('manageTransportNotifications')||can('sendTransportBroadcasts')||isAssignedToAnyRoute(VIEW.userId)],
     ['notes', ()=>roleCanSeeTab(role,'notes')],
     ['lessonplans', ()=>roleCanSeeTab(role,'lessonplans')],
@@ -3435,8 +3449,9 @@ LESSON PLANS & GOALS: One tab with three sub-tabs. OT/PT/SLP/ED are hidden from 
 PARENT CONTACT LOG (everyone with a caseload/class): Each student's setup can include a preferred contact person and method, plus a "can text" yes/no per parent/guardian — these show first in the relevant dropdowns and explicitly state can-text status when logging a contact. When logging one, record who initiated it (staff reaching out vs. the parent calling in — only staff-initiated, actually-completed contacts count toward the required quota; parent-initiated ones are logged but don't count), and optionally mark it as only an attempted contact (parent not actually reached) along with what was tried (voicemail, text, email, etc.) — making the required number of attempts by the due date stops the overdue alert even if the parent was never reached, and this is visible to Oversight. Dashboard reminds when a student is coming due based on the school's required contact frequency for that role. Required frequency is set per role in Settings → Service Requirements → Parent Contact, listing every role in the school — setting a role's count to 0 fully exempts it from any contact requirement (equivalent to removing it), and any new role created in Settings → Roles & Permissions automatically appears in this list too, starting at 0 until a count is set. That same screen also lets an Admin/Director attach one or more MANDATORY QUESTIONS to a role — each with its own free-text question wording and answer type: "Yes/No + explanation" (staff pick Yes or No, then must fill in "What was discussed?" if Yes or "Why not?" if No) or "Paragraph/sentence answer" (one open required text box answering the question directly, no Yes/No). Any number of questions can be added per role ("+ Add question"), each shows up as its own required field right on the "Log a contact" form for that role, and every answer is saved permanently onto that specific log entry — changing or removing a question later never rewrites what an older entry recorded. Answers show in the on-screen history and the printed contact log.
 CLASSES: Each class card shows its teacher, classroom staff, therapists, and roster, with up/down arrows to reorder which class appears first (applies everywhere classes are listed). Each class can also have its own general daily/weekly schedule for the record (Manage class schedule — day/time slots like Morning Meeting, Reading, Lunch) — mostly informational, except any specific time slot checked "Block therapy during this time," which genuinely stops pull-out therapy sessions from being scheduled for that class's students during that exact window (enforced everywhere therapy gets scheduled — Smart Assist, manual session save, drag-to-reschedule), different days able to have completely different blocked times. A day's schedule can be copied straight to the next school day, or a whole other class's schedule can be copied in wholesale (both are full replacements of the target, not a merge — asks first if that would discard something already there). It prints on its own from the class card or Print Center, blocked-therapy times marked. A student's own profile shows a Weekly Schedule card merging their class schedule with their real therapy sessions, flagging any class time they're pulled out of for therapy — also printable from there or from Print Center ("Full Daily/Weekly Schedule (Class + Therapy)", grouped by student or class).
 BILLING (💳 nav item — requires manageBilling or printBillingSheets): Two completely separate things live under two pills here, since they bill different parties for different reasons and shouldn't be confused with each other. "🏥 Medicaid Billing" is the original section — billing Medicaid for Respite/Self-Direction services (rate per unit, Medicaid ID, the official Respite Documentation Record and consolidated invoice format), scoped to only the students actually flagged for Respite or Self-Direction on their own record. "🎓 Tuition Billing" is billing FAMILIES for tuition, registration, and any other recurring or one-time fee — its own separate catalog of fee types (Settings-like, "⚙ Manage fee types" — name, default amount, Monthly/Yearly/One-time), assigned per student with an amount that can be overridden per family, a payment ledger (manually recorded for now — date, amount, method, note, and which specific fee item it's for, required at entry), a Dashboard showing every billed student's charged-to-date/paid/balance sorted highest-balance-first with school-wide totals, and a printable Tuition Statement per student or in bulk — formatted like a real billing statement, with a "Billed To" block addressed to the actual paying party (whichever Mother/Father names are on file, same resolution used for mailing labels) and their address, alongside the student's own name/class/year, above the itemized charges and payments (each payment shown with which fee it was for). The Dashboard also shows a collection-rate progress ring (paid vs. charged, same visual style as Transportation's dashboard) and a "By fee type" breakdown — a bar per fee type showing charged vs. paid, an exact recorded total for any payment entered after the fee-item field became required; a ~ marks a row that still includes an older payment recorded before that requirement existed, which is estimated for just that portion (split proportionally across that student's own fee items) rather than exact. "Charged to date" on a recurring item accumulates automatically based on elapsed months/years since its start date — a $500/month item shows $500 due in its first month, $1,000 the next, and so on — rather than a flat yearly total, so a family's balance always reflects what's actually accrued as of today. Removing a fee item only stops it from accruing further; it doesn't retroactively erase what it already charged. There is no live payment processor connected yet (no autopay, no online card/ACH payments) — every payment here is manually entered by staff; that's intentionally a separate, later phase.
-PRINT &amp; DOCUMENT CENTER (renamed from "Print Center" to reflect what it now covers): Batch-print across many students/classes/staff at once by document type — Session Notes, Reports & Assessments, Teacher Goals & Check-Ins (each Teacher-discipline goal from the Goals bank with its status, check-in schedule, and full check-in date/staff history — filtered to just the goals with activity in the chosen date range, when one is set), Parent Contact Log, Lesson Plans, Weekly Therapy Schedule (sessions only), Full Daily/Weekly Schedule (class schedule merged with therapy sessions), and (with billing permission) Respite Documentation Records and Billing Invoices. Also includes Master Documents, two ways to get one: upload any blank form (PDF or Word .docx, up to ~8MB) and click directly on it to place fields wherever they belong (Name, DOB, or anything else), each pulling its value automatically from a matching student/staff record (or left blank for typing in by hand each time) — placed fields capture the actual size of the blank/box they're in, so text shrinks to fit it at print time instead of overlapping neighboring cells; or skip uploading entirely with "✨ Create with AI" and describe what's needed (a permission slip, a letter home, anything) — AI drafts the actual wording with merge fields embedded directly in the text, reviewable and editable before saving, then uses the exact same Fill & Print flow. "✨ AI: place fields for me" (upload path only) places fields automatically — for a PDF it sends the rendered page to AI to spot every blank/box, its label, and its size; for a Word document it scans the actual table structure directly (a labeled cell next to an empty one) with no AI call needed. Existing fields can be dragged to reposition, and "Undo last field" reverses the most recent addition from that editing session. Once fields exist, "Fill & Print" batch-generates the filled-in document for certain students, all students, certain staff, or all staff — every value is shown for review and can be edited before anything actually prints. For an uploaded PDF form or an AI-drafted document specifically (not Word, which doesn't produce real savable PDF output yet — that one still only opens for printing), two checkboxes on that same review step can also SAVE what's generated, not just print it: "save each person's own copy to their Documents" (their own student or staff document folder, same place as anything uploaded there manually) and/or "save one combined copy to General Documents" (a school-wide library under its own card in Print & Document Center, not tied to any one person — e.g. one reference copy of a whole grade's worth of permission slips generated at once). Both are optional and additive — checking them never skips the print/view step that already happens either way. Uploading/creating a new master document or placing/editing its fields requires the editSetup permission ("Add/edit classes, students & staff"); filling out and printing an existing one is open to anyone who can reach Print & Document Center. Master documents (and student/staff/hire-application/general documents elsewhere in the app) can be renamed after the fact, and opening any stored document shows a proper viewer with its own Print/Exit buttons rather than a bare browser tab. Also here: Mailing Labels & Envelopes — mail to Students, Parents/Guardians (addressed to whichever Mother/Father names are on file, falling back to "Parent/Guardian of [Student]"), or Staff, in a physically-verified Avery 5160 (30/sheet address labels) or 5163 (10/sheet large shipping labels) layout, or printed one at a time directly onto a #10 business or A2 invitation envelope — anyone missing an address on file is silently skipped with a count shown afterward, not left blank on the sheet.
-Also here: Mailing Labels & Envelopes — mail to Students, Parents/Guardians (addressed to whichever Mother/Father names are on file, falling back to "Parent/Guardian of [Student]"), or Staff, with a "Use Yiddish names" option (same address either way, falls back to the regular name for anyone without a Yiddish name on file — see the STUDENTS entry above for where those are entered), scoped to all students, one specific class, or specific students/staff individually picked from a searchable list (staff can also be scoped to active-only when picking "All staff"), in a physically-verified Avery 5160 (30/sheet address labels) or 5163 (10/sheet large shipping labels) layout, or printed one at a time directly onto a #10 business or A2 invitation envelope — anyone missing an address on file is silently skipped with a count shown afterward, not left blank on the sheet. A trailing country segment (USA, etc.) is dropped from the printed address entirely, and city/state/zip are combined onto one line rather than split across three, matching how an address is actually written by hand.
+FUNDRAISING (💵 nav item, requires manageFundraising or viewFundraisingReports — completely separate from Billing/Tuition, since these are donors giving by choice, not families paying what they owe): six pills — Dashboard, Funds, Campaigns, Pledges, Donations, Donors. A Fund is a named bucket (General Fund, Scholarship Fund). A Campaign is a time-bound effort (a gala, a building campaign) that can optionally feed into one Fund, or stand entirely on its own with no Fund at all. A Pledge is a donor's commitment to give, often before the money arrives; a Donation is the actual gift once it's in hand — both can target a specific Fund, a specific Campaign, or just "General" with no Fund/Campaign specified, so recording either never requires setting up a Fund first. A Donation can optionally be linked to fulfill a specific outstanding Pledge, which updates that pledge's status (Outstanding → partially received → Fulfilled) automatically. Each Donor record also has an optional Prefix (Rabbi, Mr. &amp; Mrs., etc. — shown alongside their name everywhere), an optional Yiddish name ("✨ Suggest with AI" gives a best-guess Hebrew-script rendering of the whole name typed in, same starting-guess-not-authoritative caveat as the student version — shown in parentheses next to the English name, and used on Mailing Labels &amp; Envelopes' "Use Yiddish names" option), and an optional DOB, which gets the same automatic Yiddish/Hebrew-date lookup as a student's DOB. Print &amp; Document Center's Mailing Labels &amp; Envelopes can mail to Donors directly — a real donor mailing list, addressed using their Prefix if one is on file, scoped to all donors or specific ones picked from a searchable list. Each Donor's own profile (Donors tab) shows their full contact info, DOB/Yiddish DOB, total given, outstanding pledges, and their complete pledge/donation history in one place, searchable by name, prefix, email, or phone. Printable from here: a donor's own "🖨 Print statement" (a giving statement/receipt, itemized by donation, with a running total — useful for a donor's own tax records), a school-wide "🖨 Print summary report" from the Dashboard (totals, by-fund and by-campaign breakdowns, recent donations, top donors), and a date-range "🖨 Print ledger" from the Donations tab (every donation received in a range, in order, with a total — an accounting-style record). Donors, Pledges, Donations, Campaigns, and Funds are also all included in the main Search tab's results for anyone with Fundraising access.
+PRINT &amp; DOCUMENT CENTER (renamed from "Print Center" to reflect what it now covers): Batch-print across many students/classes/staff at once by document type — Session Notes, Reports & Assessments, Teacher Goals & Check-Ins (each Teacher-discipline goal from the Goals bank with its status, check-in schedule, and full check-in date/staff history — filtered to just the goals with activity in the chosen date range, when one is set), Parent Contact Log, Lesson Plans, Weekly Therapy Schedule (sessions only), Full Daily/Weekly Schedule (class schedule merged with therapy sessions), and (with billing permission) Respite Documentation Records and Billing Invoices. Also includes Master Documents, two ways to get one: upload any blank form (PDF or Word .docx, up to ~8MB) and click directly on it to place fields wherever they belong (Name, DOB, or anything else), each pulling its value automatically from a matching student/staff record (or left blank for typing in by hand each time) — placed fields capture the actual size of the blank/box they're in, so text shrinks to fit it at print time instead of overlapping neighboring cells; or skip uploading entirely with "✨ Create with AI" and describe what's needed (a permission slip, a letter home, anything) — AI drafts the actual wording with merge fields embedded directly in the text, reviewable and editable before saving, then uses the exact same Fill & Print flow. "✨ AI: place fields for me" (upload path only) places fields automatically — for a PDF it sends the rendered page to AI to spot every blank/box, its label, and its size; for a Word document it scans the actual table structure directly (a labeled cell next to an empty one) with no AI call needed. Existing fields can be dragged to reposition, and "Undo last field" reverses the most recent addition from that editing session. Once fields exist, "Fill & Print" batch-generates the filled-in document for certain students, all students, certain staff, or all staff — every value is shown for review and can be edited before anything actually prints. For an uploaded PDF form or an AI-drafted document specifically (not Word, which doesn't produce real savable PDF output yet — that one still only opens for printing), two checkboxes on that same review step can also SAVE what's generated, not just print it: "save each person's own copy to their Documents" (their own student or staff document folder, same place as anything uploaded there manually) and/or "save one combined copy to General Documents" (a school-wide library under its own card in Print & Document Center, not tied to any one person — e.g. one reference copy of a whole grade's worth of permission slips generated at once). Both are optional and additive — checking them never skips the print/view step that already happens either way. Uploading/creating a new master document or placing/editing its fields requires the editSetup permission ("Add/edit classes, students & staff"); filling out and printing an existing one is open to anyone who can reach Print & Document Center. Master documents (and student/staff/hire-application/general documents elsewhere in the app) can be renamed after the fact, and opening any stored document shows a proper viewer with its own Print/Exit buttons rather than a bare browser tab. Also here: Mailing Labels & Envelopes — mail to Students, Parents/Guardians (addressed to whichever Mother/Father names are on file, falling back to "Parent/Guardian of [Student]"), Staff, or Donors (a real donor mailing list, requires manageFundraising or viewFundraisingReports, addressed using the donor's own Prefix if one is on file), in a physically-verified Avery 5160 (30/sheet address labels) or 5163 (10/sheet large shipping labels) layout, or printed one at a time directly onto a #10 business or A2 invitation envelope — anyone missing an address on file is silently skipped with a count shown afterward, not left blank on the sheet.
+Also here: Mailing Labels & Envelopes — mail to Students, Parents/Guardians (addressed to whichever Mother/Father names are on file, falling back to "Parent/Guardian of [Student]"), Staff, or Donors (a real donor mailing list, requires manageFundraising or viewFundraisingReports, addressed using the donor's own Prefix if one is on file), with a "Use Yiddish names" option (same address either way, falls back to the regular name for anyone without a Yiddish name on file — see the STUDENTS and FUNDRAISING entries for where those are entered), scoped to all students, one specific class, or specific students/staff/donors individually picked from a searchable list (staff can also be scoped to active-only when picking "All staff"), in a physically-verified Avery 5160 (30/sheet address labels) or 5163 (10/sheet large shipping labels) layout, or printed one at a time directly onto a #10 business or A2 invitation envelope — anyone missing an address on file is silently skipped with a count shown afterward, not left blank on the sheet. A trailing country segment (USA, etc.) is dropped from the printed address entirely, and city/state/zip are combined onto one line rather than split across three, matching how an address is actually written by hand.
 ADMISSION CARDS: a wallet/ID-card sized card (standard credit-card dimensions) per student — a colored "Admission Card" banner, name, address, home phone, and academic year shown as a small gold pill, plus their photo if one's on file (initials otherwise, both framed in a gold accent border) and the school's own logo on every card (not just once at the top of the page, since these get cut apart and handed out individually). "🎫 Card" on any student's own card in the Students list prints just that one (English only); "🎫 Print admission cards — all" at the top of the Students list opens a picker (everyone currently visible pre-checked, individually deselectable, plus a "Use Yiddish names" option) rather than printing immediately — it does not respect whatever's typed into the on-screen search box above the list on its own, which only hides/shows cards visually rather than changing who's included; use the picker's own search/checkboxes to narrow who actually gets a card.
 WEEKLY COMPLIANCE REPORT (automated, no one has to run it — requires the school's own RESEND_API_KEY environment variable to be set on the Netlify site; this is a separate service from EmailJS, unwired otherwise): Every Friday at 2:00 PM school time, anyone with 1:1 sessions and applicable activity that week gets their own compliance report emailed straight to them — sessions held/missed, notes written/missing, and any duration shortfalls — as a PDF attachment, entirely automatic and requiring no login. A week made up entirely of holidays/days off (per Settings → School → Holidays/days off and the school's weekly school days) results in no email at all for anyone that week rather than false "missed" flags for days school was never open; a single holiday within an otherwise normal week is excluded from that day's expected-session count the same way. It CCs that specific person's own Supervisor, set per-staff-member on their Staff → Edit card (a plain "who oversees this person" assignment, distinct from the "Supervisor" role itself — a Teacher's supervisor could be a Director, a Program Manager, anyone) — no Supervisor set means no CC for that person's report, it doesn't fall back to CCing anyone else by default. Someone with nothing applicable that week (no 1:1 sessions, nothing to report) simply gets no email at all that week, by design. Past weeks' numbers are archived and viewable on that staff member's own profile (to themselves, Admin, Supervisor, or viewOversight) under "Weekly compliance reports," even if the email itself failed to send for some reason. On their own profile, anyone can also click "Send me a test report now" to get an immediate live preview emailed to themselves (CC'ing their own Supervisor if one is set) without waiting for Friday — useful for confirming RESEND_API_KEY is actually working after first setting it up.
 OVERSIGHT (Admin/Supervisor — requires "View oversight" permission): Collapsible sections — Compliance at a glance, Recently changed sessions, Caseload compliance table, What's missing, Unconfirmed sessions, Why sessions get missed, Session duration violations, Late confirmations, Invalid session times, All notes, Staff absence balances. "Invalid session times" finds any session whose end isn't genuinely after its start (most commonly a zero-length "4:00 PM–4:00 PM" left behind by dragging a session onto an already-packed day, which used to silently clamp the end time down to the start instead of rejecting the move outright — now blocked at the source, but this catches anything already broken from before that fix) — a broken session like this never counts toward a mandate and won't display sensibly on the calendar; each row has a "Fix / delete" shortcut straight into that session's Edit modal. "Late confirmations" is a separate accountability check from duration violations — it flags a session confirmed well after its own scheduled end (default 2 hours, adjustable in Settings → Service Requirements → Accountability), which catches something duration-checking alone can't: someone clicking "✓ Ran as scheduled" (which assumes the full length happened, no shortfall, no reason needed) for a session they're only now confirming hours — or days — after it should have run. For 1:1 sessions specifically, confirming this late now requires a typed explanation ("Why wasn't this confirmed in real time?") before the session can be finalized — shown in this same table alongside the delay. "Session duration violations" itself flags a HELD session whose actual duration came in short of scheduled by at least a configurable number of minutes (default 5, also adjustable in Settings → Service Requirements → Accountability) — one combined figure, whether the shortfall came from starting late, ending early, or some of each, not two separate grace periods; below that threshold, a session simply isn't flagged at all. The same threshold and count also appear automatically in each staff member's own weekly emailed compliance report (see WEEKLY COMPLIANCE REPORT below), right alongside the existing late-confirmation count. Everything is scoped to the current school year. Each section has its own print button (letterhead-branded PDF). Also includes "✨ AI Day / Range Summary" — pick a From/To date and a Scope, then Generate summary for a short, readable AI write-up (attendance, sessions held/skipped, notes, and anything that stands out) for that date or range, not a replacement for the detail sections above. Scope options: Overall (school-wide, the original version), Student (that one student's sessions, attendance, notes, contacts, and reports), Class (the same, rolled up for every student in that class), and Therapist/Staff (that person's own sessions, notes, contacts, reports, and absences). Each scope automatically leaves out sections that don't apply to it (e.g. attendance/hiring activity are skipped when summarizing a single staff member), and the printed summary states which scope was used.
@@ -3712,6 +3727,7 @@ function render(){
           ${roleCanSeeTab(currentStaff().role,'messages')? navItem('messages','✉️','Messages', unreadMessageCount()) : ''}
           ${roleCanSeeTab(currentStaff().role,'teammeetings')? navItem('teammeetings','🗣️','Team Meetings') : ''}
           ${(currentStaff().role==='Admin' || can('accessLeadershipMeetings') || can('manageAdminMeetingGroups'))? navItem('leadershipmeetings','📋','Admin Meetings') : ''}
+          ${(currentStaff().role==='Admin' || can('manageFundraising') || can('viewFundraisingReports'))? navItem('fundraising','💵','Fundraising') : ''}
           ${(currentStaff().role==='Admin' || can('manageRegistration') || can('viewRegistration'))? navItem('registration','📋','Registration') : ''}
           ${(currentStaff().role==='Admin' || can('manageBilling') || can('printBillingSheets'))? navItem('billing','💳','Billing') : ''}
           ${(currentStaff().role==='Admin' || can('manageFamilies') || can('viewFamilies'))? navItem('families','👪','Families') : ''}
@@ -3821,7 +3837,7 @@ function goBackTab(){ const h = VIEW.tabHistory||[]; if(!h.length) return; VIEW.
 function tabTitle(){
   if(VIEW.tab==='hireapps' && !(currentStaff().role==='Admin' || can('manageHRIntake')) && can('signBoardApprovals')) return 'Sign as Board President';
   return {dashboard:'Dashboard', students:'Students', staff:'Staff', setup:'Classes', servicereqs:'Service Requirements', schedule:'Schedule', calendar:'Calendar', attendance:'Attendance',
-    notes:'Session Notes', lessonplans:'Lesson Plans & Goals', teammeetings:'Team Meetings', leadershipmeetings:'Admin Meetings', printcenter:'Print &amp; Document Center', reports:'Reports & Assessments', search:'Search', messages:'Messages', contacts:'Parent Contact Log', oversight:'Oversight', auditlog:'Audit Log', billing:'Billing', families:'Families', registration:'Registration', hireapps:'New Hire Applications', transportation:'Transportation', onboardingDocReview:'Document Review', settings:'Settings'}[VIEW.tab];
+    notes:'Session Notes', lessonplans:'Lesson Plans & Goals', teammeetings:'Team Meetings', leadershipmeetings:'Admin Meetings', printcenter:'Print &amp; Document Center', reports:'Reports & Assessments', search:'Search', messages:'Messages', contacts:'Parent Contact Log', oversight:'Oversight', auditlog:'Audit Log', billing:'Billing', fundraising:'Fundraising', families:'Families', registration:'Registration', hireapps:'New Hire Applications', transportation:'Transportation', onboardingDocReview:'Document Review', settings:'Settings'}[VIEW.tab];
 }
 // A pre-filled <input type="date"> fires its "change" event the instant whichever single
 // segment you're editing (month/day/year) becomes valid on its own — not when you're actually
@@ -3867,7 +3883,7 @@ function renderContent(){
   // a box scrolled to a totally different, wrong part of a screen scrolled well past the top.
   const savedWindowScrollY = preserveScroll ? window.scrollY : 0;
   const fns = {dashboard:renderDashboard, students:renderStudentProfileSection, staff:renderStaffProfileSection, setup:renderSetup, servicereqs:renderServiceRequirements, schedule:renderSchedule, calendar:renderSchoolCalendar, attendance:renderAttendance,
-    notes:renderNotes, lessonplans:renderLessonPlans, teammeetings:renderTeamMeetings, leadershipmeetings:renderLeadershipMeetings, printcenter:renderPrintCenter, reports:renderReports, search:renderSearch, messages:renderMessages, contacts:renderContacts, oversight:renderOversight, auditlog:renderAuditLog, billing:renderBilling, families:renderFamilies, registration:renderRegistration, hireapps:renderHireApplications, transportation:renderTransportation, onboardingDocReview:renderOnboardingDocReview, settings:renderSettings};
+    notes:renderNotes, lessonplans:renderLessonPlans, teammeetings:renderTeamMeetings, leadershipmeetings:renderLeadershipMeetings, printcenter:renderPrintCenter, reports:renderReports, search:renderSearch, messages:renderMessages, contacts:renderContacts, oversight:renderOversight, auditlog:renderAuditLog, billing:renderBilling, fundraising:renderFundraising, families:renderFamilies, registration:renderRegistration, hireapps:renderHireApplications, transportation:renderTransportation, onboardingDocReview:renderOnboardingDocReview, settings:renderSettings};
   try{
     c.innerHTML = fns[VIEW.tab]();
     afterRenderHooks[VIEW.tab] && afterRenderHooks[VIEW.tab]();
@@ -5491,15 +5507,25 @@ function saveDashboardComplianceWidgets(){
 }
 // Registration packet — page 1 (the editable letter from Settings, personalized with the current
 // year) + page 2 (a Family/Student Information form, one row per child rather than the original
-// paper form's single fixed row). Pre-fills whatever Ledger already has on file (names, address,
-// phone, allergies); anything the app doesn't track at all (emergency contacts, family doctor,
-// grandparents) prints as blank fields for the family to fill in by hand, same as the original
-// paper form — this is a print-and-return document, not a data-entry replacement.
+// paper form's single fixed row). Pre-fills whatever Ledger has on file, including the
+// Emergency Contact / Medical / Grandparents' Information sections and Mother/Father's
+// workplace & maiden name — all now real structured fields on the student record (see
+// openStudentModal's "Emergency contact, medical & grandparents" section), not blank-by-hand
+// fields like the original paper form. "Name"/"First Name" fields are labeled bilingually
+// (Hebrew + English) exactly as they appear on the original paper form; every other field
+// (Address, Phone, Workplace, Maiden Name, Email, Emergency Contact, Medical, Grandparents) is
+// English-only, also matching the original — the source document itself only bilinguals the
+// name fields, not the rest.
 function registrationPacketBodyHtml(family){
   const first = family.students[0];
   const familyDisplayName = registrationFamilyDisplayName(first);
   const mo = first.mother||{}, fa = first.father||{};
+  const ec = (first.emergencyContacts && first.emergencyContacts.length ? first.emergencyContacts : [{},{}]);
+  const ec1 = ec[0]||{}, ec2 = ec[1]||{};
+  const med = first.medical||{};
+  const gp = first.grandparents||{}; const gpP = gp.paternal||{}, gpM = gp.maternal||{};
   const letterBody = registrationLetterHtml();
+  const medicalComment = [med.comment, ...family.students.map(s=>s.allergies)].filter(Boolean).join('; ');
   const studentRowsHtml = family.students.map(s=>`
     <tr>
       <td style="padding:6px;border:1px solid #999;">${escapeHtml(s.name)}</td>
@@ -5513,46 +5539,57 @@ function registrationPacketBodyHtml(family){
       <h2 style="text-align:center;margin-top:0;">PARENT / STUDENT INFORMATION</h2>
       <h3 style="margin-bottom:6px;">Family Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>Name:</strong> ${escapeHtml(familyDisplayName)}</td>
+        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>נאמען / Name:</strong> ${escapeHtml(familyDisplayName)}</td>
             <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Address:</strong> ${escapeHtml(first.address||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Home phone:</strong> ${escapeHtml(first.homePhone||'')}</td></tr>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Phone (Home):</strong> ${escapeHtml(first.homePhone||'')}</td></tr>
       </table>
       <h3 style="margin-bottom:6px;">Father's Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>Name:</strong> ${escapeHtml(fa.name||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Cell phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Email:</strong> ${escapeHtml(fa.email||'')}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>ערשטע נאמען / First Name:</strong> ${escapeHtml(fa.name||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Cell Phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Workplace / Kolel:</strong> ${escapeHtml(fa.workplace||'')}</td></tr>
+        <tr><td colspan="3" style="padding:6px;border:1px solid #999;"><strong>Email:</strong> ${escapeHtml(fa.email||'')}</td></tr>
       </table>
       <h3 style="margin-bottom:6px;">Mother's Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>Name:</strong> ${escapeHtml(mo.name||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Cell phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Email:</strong> ${escapeHtml(mo.email||'')}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>ערשטע נאמען / First Name:</strong> ${escapeHtml(mo.name||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Cell Phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Workplace:</strong> ${escapeHtml(mo.workplace||'')}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #999;"><strong>Maiden Name:</strong> ${escapeHtml(mo.maidenName||'')}</td>
+            <td colspan="2" style="padding:6px;border:1px solid #999;"><strong>Email:</strong> ${escapeHtml(mo.email||'')}</td></tr>
       </table>
-      <h3 style="margin-bottom:6px;">Student(s)</h3>
+      <h3 style="margin-bottom:6px;">תלמיד / Student(s) Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <thead><tr style="background:#F1E3EC;"><th style="padding:6px;border:1px solid #999;">Legal name</th><th style="padding:6px;border:1px solid #999;">Class</th><th style="padding:6px;border:1px solid #999;">DOB</th></tr></thead>
+        <thead><tr style="background:#F1E3EC;"><th style="padding:6px;border:1px solid #999;">ערשטע נאמען / Legal Name</th><th style="padding:6px;border:1px solid #999;">כתה / Class</th><th style="padding:6px;border:1px solid #999;">DOB / יום הולדת</th></tr></thead>
         <tbody>${studentRowsHtml}</tbody>
       </table>
       <h3 style="margin-bottom:6px;">Emergency Contact Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
         <thead><tr style="background:#F1E3EC;"><th style="padding:6px;border:1px solid #999;">Name</th><th style="padding:6px;border:1px solid #999;">Relationship</th><th style="padding:6px;border:1px solid #999;">Phone</th></tr></thead>
-        <tbody><tr><td style="padding:14px;border:1px solid #999;">&nbsp;</td><td style="padding:14px;border:1px solid #999;">&nbsp;</td><td style="padding:14px;border:1px solid #999;">&nbsp;</td></tr>
-        <tr><td style="padding:14px;border:1px solid #999;">&nbsp;</td><td style="padding:14px;border:1px solid #999;">&nbsp;</td><td style="padding:14px;border:1px solid #999;">&nbsp;</td></tr></tbody>
+        <tbody>
+        <tr><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec1.name||'')||'&nbsp;'}</td><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec1.relationship||'')||'&nbsp;'}</td><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec1.phone||'')||'&nbsp;'}</td></tr>
+        <tr><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec2.name||'')||'&nbsp;'}</td><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec2.relationship||'')||'&nbsp;'}</td><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec2.phone||'')||'&nbsp;'}</td></tr>
+        </tbody>
       </table>
       <h3 style="margin-bottom:6px;">Medical Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:50%;"><strong>Family doctor:</strong> &nbsp;</td><td style="padding:6px;border:1px solid #999;width:50%;"><strong>Phone:</strong> &nbsp;</td></tr>
-        <tr><td colspan="2" style="padding:6px;border:1px solid #999;"><strong>Medical comment / allergies:</strong> ${escapeHtml(family.students.map(s=>s.allergies).filter(Boolean).join('; '))||'&nbsp;'}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #999;width:34%;"><strong>Family Doctor:</strong> ${escapeHtml(med.doctorName||'')||'&nbsp;'}</td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Address:</strong> ${escapeHtml(med.doctorAddress||'')||'&nbsp;'}</td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Phone:</strong> ${escapeHtml(med.doctorPhone||'')||'&nbsp;'}</td></tr>
+        <tr><td colspan="3" style="padding:6px;border:1px solid #999;"><strong>Medical Comment / Allergies:</strong> ${escapeHtml(medicalComment)||'&nbsp;'}</td></tr>
       </table>
-      <h3 style="margin-bottom:6px;">Grandparents' Information</h3>
+      <h3 style="margin-bottom:6px;">Grandparent's Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
-        <tr><td style="padding:14px;border:1px solid #999;" colspan="2">&nbsp;</td></tr>
-        <tr><td style="padding:14px;border:1px solid #999;" colspan="2">&nbsp;</td></tr>
+        <tr><td style="padding:6px;border:1px solid #999;width:34%;"><strong>Name:</strong> ${escapeHtml(gpP.name||'')||'&nbsp;'} <span class="small muted">(Paternal)</span></td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Address:</strong> ${escapeHtml(gpP.address||'')||'&nbsp;'}</td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Phone:</strong> ${escapeHtml(gpP.phone||'')||'&nbsp;'}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #999;"><strong>Name:</strong> ${escapeHtml(gpM.name||'')||'&nbsp;'} <span class="small muted">(Maternal)</span></td>
+            <td style="padding:6px;border:1px solid #999;"><strong>Address:</strong> ${escapeHtml(gpM.address||'')||'&nbsp;'}</td>
+            <td style="padding:6px;border:1px solid #999;"><strong>Phone:</strong> ${escapeHtml(gpM.phone||'')||'&nbsp;'}</td></tr>
       </table>
       <h3 style="margin-bottom:6px;">Medical Consent</h3>
       <div style="margin-bottom:8px;">I hereby authorize ${escapeHtml(STATE.schoolName)} as our agent to consent to any emergency diagnostic procedure, medical care, or hospital as deemed necessary for the student(s) listed above.</div>
-      <div style="margin-bottom:16px;">Child may be given OTC pain relief medication: ☐ Yes &nbsp; ☐ No</div>
+      <div style="margin-bottom:16px;">Child may be given OTC pain relief medication: ${first.otcMedicationAllowed===true?'☒':'☐'} Yes &nbsp; ${first.otcMedicationAllowed===false?'☒':'☐'} No</div>
       <div style="display:flex;gap:40px;">
         <div style="flex:1;">Parent Signature: _________________________</div>
         <div style="flex:1;">Date: _________________________</div>
@@ -7657,7 +7694,7 @@ async function backfillHebrewDobs(){
   }, 'Look them up');
 }
 function openStudentModal(id){
-  const s = id? byId(STATE.students,id) : {id:uid('stu'), year:STATE.currentYear, name:'', dob:'', diagnosis:'', classId:'', therapists:{}, mandates:{}, goals:[], parent:{}, mother:{}, father:{}, homePhone:'', address:'', respiteType:'', medicaidId:'', selfDirection:false, sdBudget:0, contactPref:{}, usesTransportation:true, transportStopId:'', transportAddressDifferent:false, transportContactName:'', transportAddress:'', transportContactPhone:'', tuitionItems:[]};
+  const s = id? byId(STATE.students,id) : {id:uid('stu'), year:STATE.currentYear, name:'', dob:'', diagnosis:'', classId:'', therapists:{}, mandates:{}, goals:[], parent:{}, mother:{}, father:{}, homePhone:'', address:'', respiteType:'', medicaidId:'', selfDirection:false, sdBudget:0, contactPref:{}, usesTransportation:true, transportStopId:'', transportAddressDifferent:false, transportContactName:'', transportAddress:'', transportContactPhone:'', tuitionItems:[], emergencyContacts:[{},{}], medical:{}, otcMedicationAllowed:null, grandparents:{paternal:{}, maternal:{}}};
   const cls = classesOfYear(); const m = s.mandates||{}; const p = s.parent||{}; const mo = s.mother||{}; const fa = s.father||{}; const pref = s.contactPref||{};
   showModal(`
     <h3>${id?'Edit':'Add'} student</h3>
@@ -7727,14 +7764,17 @@ function openStudentModal(id){
           <input id="mMotherName" placeholder="Mother's name" value="${escapeHtml(mo.name||'')}" style="margin-bottom:6px;">
           <input id="mMotherCell" placeholder="Mother's cell" value="${escapeHtml(mo.cell||'')}" style="margin-bottom:4px;">
           <select id="mMotherCanText" style="margin-bottom:6px;">${canTextOptionsHtml(mo.canText)}</select>
-          <input id="mMotherEmail" placeholder="Mother's email" value="${escapeHtml(mo.email||'')}">
+          <input id="mMotherEmail" placeholder="Mother's email" value="${escapeHtml(mo.email||'')}" style="margin-bottom:6px;">
+          <input id="mMotherWorkplace" placeholder="Mother's workplace" value="${escapeHtml(mo.workplace||'')}" style="margin-bottom:6px;">
+          <input id="mMotherMaidenName" placeholder="Mother's maiden name" value="${escapeHtml(mo.maidenName||'')}">
         </div>
         <div>
           <div class="small muted" style="margin-bottom:3px;">Father</div>
           <input id="mFatherName" placeholder="Father's name" value="${escapeHtml(fa.name||'')}" style="margin-bottom:6px;">
           <input id="mFatherCell" placeholder="Father's cell" value="${escapeHtml(fa.cell||'')}" style="margin-bottom:4px;">
           <select id="mFatherCanText" style="margin-bottom:6px;">${canTextOptionsHtml(fa.canText)}</select>
-          <input id="mFatherEmail" placeholder="Father's email" value="${escapeHtml(fa.email||'')}">
+          <input id="mFatherEmail" placeholder="Father's email" value="${escapeHtml(fa.email||'')}" style="margin-bottom:6px;">
+          <input id="mFatherWorkplace" placeholder="Father's workplace / Kolel" value="${escapeHtml(fa.workplace||'')}">
         </div>
       </div>
       <div class="form-cols" style="margin-bottom:8px;">
@@ -7750,6 +7790,57 @@ function openStudentModal(id){
       <input id="mParentEmail" placeholder="Email" value="${escapeHtml(p.email||'')}">
       <select id="mParentCanText" style="margin-top:6px;">${canTextOptionsHtml(p.canText)}</select>
     </div>
+    ${(()=>{
+      const ec = s.emergencyContacts && s.emergencyContacts.length ? s.emergencyContacts : [{},{}];
+      const med = s.medical||{};
+      const gp = s.grandparents||{}; const gpP = gp.paternal||{}; const gpM = gp.maternal||{};
+      const hasAny = ec.some(c=>c&&(c.name||c.phone||c.relationship)) || med.doctorName || med.doctorAddress || med.doctorPhone || med.comment || gpP.name || gpP.address || gpP.phone || gpM.name || gpM.address || gpM.phone || s.otcMedicationAllowed!=null;
+      return `<div class="form-row" style="margin-bottom:6px;">
+      <label style="cursor:pointer;" onclick="VIEW.regIntakeExpanded=!VIEW.regIntakeExpanded;document.getElementById('regIntakeWrap').style.display=VIEW.regIntakeExpanded?'block':'none';document.getElementById('regIntakeToggle').textContent=VIEW.regIntakeExpanded?'▾':'▸';"><span id="regIntakeToggle">${(VIEW.regIntakeExpanded||hasAny)?'▾':'▸'}</span> Emergency contact, medical &amp; grandparents <span class="small muted">(optional — used on the printed Registration packet)</span></label>
+      <div id="regIntakeWrap" style="display:${(VIEW.regIntakeExpanded||hasAny)?'block':'none'};background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-top:4px;">
+        <div class="small muted" style="margin-bottom:6px;font-weight:600;">Emergency Contact Information</div>
+        <div class="form-cols" style="margin-bottom:8px;">
+          <input id="mEmerg1Name" placeholder="Name" value="${escapeHtml(ec[0]&&ec[0].name||'')}">
+          <input id="mEmerg1Relationship" placeholder="Relationship" value="${escapeHtml(ec[0]&&ec[0].relationship||'')}">
+          <input id="mEmerg1Phone" placeholder="Phone" value="${escapeHtml(ec[0]&&ec[0].phone||'')}">
+        </div>
+        <div class="form-cols" style="margin-bottom:10px;">
+          <input id="mEmerg2Name" placeholder="Name (2nd contact)" value="${escapeHtml(ec[1]&&ec[1].name||'')}">
+          <input id="mEmerg2Relationship" placeholder="Relationship" value="${escapeHtml(ec[1]&&ec[1].relationship||'')}">
+          <input id="mEmerg2Phone" placeholder="Phone" value="${escapeHtml(ec[1]&&ec[1].phone||'')}">
+        </div>
+        <div class="small muted" style="margin-bottom:6px;font-weight:600;">Medical Information</div>
+        <div class="form-cols" style="margin-bottom:8px;">
+          <input id="mDoctorName" placeholder="Family Doctor" value="${escapeHtml(med.doctorName||'')}">
+          <input id="mDoctorAddress" placeholder="Address" value="${escapeHtml(med.doctorAddress||'')}">
+          <input id="mDoctorPhone" placeholder="Phone" value="${escapeHtml(med.doctorPhone||'')}">
+        </div>
+        <input id="mMedicalComment" placeholder="Medical Comment / Allergies" value="${escapeHtml(med.comment||'')}" style="margin-bottom:10px;">
+        <label style="font-weight:400;display:flex;align-items:center;gap:8px;margin-bottom:10px;">Child may be given OTC pain relief medication:
+          <select id="mOtcAllowed" style="width:auto;">
+            <option value="" ${s.otcMedicationAllowed==null?'selected':''}>— not set —</option>
+            <option value="yes" ${s.otcMedicationAllowed===true?'selected':''}>Yes</option>
+            <option value="no" ${s.otcMedicationAllowed===false?'selected':''}>No</option>
+          </select>
+        </label>
+        <div class="small muted" style="margin-bottom:6px;font-weight:600;">Grandparent's Information</div>
+        <div class="form-cols" style="margin-bottom:8px;align-items:start;">
+          <div>
+            <div class="small muted" style="margin-bottom:3px;">Paternal grandparents</div>
+            <input id="mGpPatName" placeholder="Name" value="${escapeHtml(gpP.name||'')}" style="margin-bottom:6px;">
+            <input id="mGpPatAddress" placeholder="Address (incl. City/State/Zip)" value="${escapeHtml(gpP.address||'')}" style="margin-bottom:6px;">
+            <input id="mGpPatPhone" placeholder="Phone" value="${escapeHtml(gpP.phone||'')}">
+          </div>
+          <div>
+            <div class="small muted" style="margin-bottom:3px;">Maternal grandparents</div>
+            <input id="mGpMatName" placeholder="Name" value="${escapeHtml(gpM.name||'')}" style="margin-bottom:6px;">
+            <input id="mGpMatAddress" placeholder="Address (incl. City/State/Zip)" value="${escapeHtml(gpM.address||'')}" style="margin-bottom:6px;">
+            <input id="mGpMatPhone" placeholder="Phone" value="${escapeHtml(gpM.phone||'')}">
+          </div>
+        </div>
+      </div>
+    </div>`;
+    })()}
     <div class="form-row"><label>Best way to reach this family <span class="small">(shown to staff right on the "Log a contact" screen)</span></label>
       <div class="form-cols">
         <div><div class="small muted" style="margin-bottom:3px;">Best person to contact</div>
@@ -7858,8 +7949,18 @@ function saveStudent(id){
   }
   s.goals = s.goals||[];
   s.parent = { name: document.getElementById('mParentName').value.trim(), phone: document.getElementById('mParentPhone').value.trim(), email: document.getElementById('mParentEmail').value.trim(), canText: parseCanText(document.getElementById('mParentCanText').value) };
-  s.mother = { name: document.getElementById('mMotherName').value.trim(), yiddishName: document.getElementById('mMotherYiddishName') ? document.getElementById('mMotherYiddishName').value.trim() : ((s.mother&&s.mother.yiddishName)||''), cell: document.getElementById('mMotherCell').value.trim(), email: document.getElementById('mMotherEmail').value.trim(), canText: parseCanText(document.getElementById('mMotherCanText').value) };
-  s.father = { name: document.getElementById('mFatherName').value.trim(), yiddishName: document.getElementById('mFatherYiddishName') ? document.getElementById('mFatherYiddishName').value.trim() : ((s.father&&s.father.yiddishName)||''), cell: document.getElementById('mFatherCell').value.trim(), email: document.getElementById('mFatherEmail').value.trim(), canText: parseCanText(document.getElementById('mFatherCanText').value) };
+  s.mother = { name: document.getElementById('mMotherName').value.trim(), yiddishName: document.getElementById('mMotherYiddishName') ? document.getElementById('mMotherYiddishName').value.trim() : ((s.mother&&s.mother.yiddishName)||''), cell: document.getElementById('mMotherCell').value.trim(), email: document.getElementById('mMotherEmail').value.trim(), canText: parseCanText(document.getElementById('mMotherCanText').value), workplace: document.getElementById('mMotherWorkplace').value.trim(), maidenName: document.getElementById('mMotherMaidenName').value.trim() };
+  s.father = { name: document.getElementById('mFatherName').value.trim(), yiddishName: document.getElementById('mFatherYiddishName') ? document.getElementById('mFatherYiddishName').value.trim() : ((s.father&&s.father.yiddishName)||''), cell: document.getElementById('mFatherCell').value.trim(), email: document.getElementById('mFatherEmail').value.trim(), canText: parseCanText(document.getElementById('mFatherCanText').value), workplace: document.getElementById('mFatherWorkplace').value.trim() };
+  s.emergencyContacts = [
+    { name: document.getElementById('mEmerg1Name').value.trim(), relationship: document.getElementById('mEmerg1Relationship').value.trim(), phone: document.getElementById('mEmerg1Phone').value.trim() },
+    { name: document.getElementById('mEmerg2Name').value.trim(), relationship: document.getElementById('mEmerg2Relationship').value.trim(), phone: document.getElementById('mEmerg2Phone').value.trim() },
+  ].filter(c=>c.name||c.relationship||c.phone);
+  s.medical = { doctorName: document.getElementById('mDoctorName').value.trim(), doctorAddress: document.getElementById('mDoctorAddress').value.trim(), doctorPhone: document.getElementById('mDoctorPhone').value.trim(), comment: document.getElementById('mMedicalComment').value.trim() };
+  { const otcVal = document.getElementById('mOtcAllowed').value; s.otcMedicationAllowed = otcVal==='yes'?true:otcVal==='no'?false:null; }
+  s.grandparents = {
+    paternal: { name: document.getElementById('mGpPatName').value.trim(), address: document.getElementById('mGpPatAddress').value.trim(), phone: document.getElementById('mGpPatPhone').value.trim() },
+    maternal: { name: document.getElementById('mGpMatName').value.trim(), address: document.getElementById('mGpMatAddress').value.trim(), phone: document.getElementById('mGpMatPhone').value.trim() },
+  };
   s.contactPref = { person: document.getElementById('mBestContactPerson').value, method: document.getElementById('mBestContactMethod').value };
   s.homePhone = document.getElementById('mHomePhone').value.trim();
   if(document.getElementById('mRespiteType')){
@@ -13447,6 +13548,10 @@ function renderMailingLabelsSection(){
   // a basic name/role/email directory is fine for everyone, but printing out someone's actual
   // home address onto a label is a different, higher bar.
   const canMailStaff = currentStaff().role==='Admin' || currentStaff().role==='Supervisor' || can('editSetup') || can('viewOversight') || canManageStaffDocs();
+  // Donor mailing (a real donor mailing list) is gated the same way the Fundraising tab itself
+  // is — someone who couldn't otherwise open Fundraising or see a donor's contact info shouldn't
+  // be able to print their name/address onto a label sheet from over here either.
+  const canMailDonors = currentStaff().role==='Admin' || can('manageFundraising') || can('viewFundraisingReports');
   return `<div class="card" style="max-width:620px;margin-top:18px;">
     <h3>Mailing Labels &amp; Envelopes</h3>
     <div class="muted small" style="margin-bottom:10px;">Pick who it's going to and what you're printing onto — sizes below have been checked against real manufacturer specs, not guessed, so they should line up on genuine (or compatible store-brand) sheets straight out of the box. Always run one test sheet on plain paper first; printer feed tolerances vary.</div>
@@ -13456,6 +13561,7 @@ function renderMailingLabelsSection(){
           <option value="students" ${VIEW.mailRecipientType==='students'?'selected':''}>Students (addressed to the student)</option>
           <option value="parents" ${VIEW.mailRecipientType==='parents'?'selected':''}>Parents/Guardians (addressed to Mother/Father on file)</option>
           ${canMailStaff? `<option value="staff" ${VIEW.mailRecipientType==='staff'?'selected':''}>Staff</option>` : ''}
+          ${canMailDonors? `<option value="donors" ${VIEW.mailRecipientType==='donors'?'selected':''}>Donors</option>` : ''}
         </select>
       </div>
       <div class="form-row"><label>Format</label>
@@ -13466,7 +13572,27 @@ function renderMailingLabelsSection(){
       </div>
     </div>
     <div class="form-row" style="margin-bottom:6px;"><label style="font-weight:400;display:flex;gap:6px;"><input type="checkbox" id="mailUseYiddish"> Use Yiddish names <span class="small muted">(same address either way — falls back to the regular name for anyone without a Yiddish name on file)</span></label></div>
-    ${VIEW.mailRecipientType!=='staff'? `<div class="form-row"><label>Which students</label>
+    ${VIEW.mailRecipientType==='staff'? `<div class="form-row"><label>Which staff</label>
+      <select id="mailScopeMode" onchange="VIEW.mailScopeMode=this.value;renderContent();">
+        <option value="all" ${VIEW.mailScopeMode==='all'?'selected':''}>All staff</option>
+        <option value="specific" ${VIEW.mailScopeMode==='specific'?'selected':''}>Specific staff</option>
+      </select>
+    </div>
+    ${VIEW.mailScopeMode==='specific'? `<div class="form-row">
+      <div class="search-box"><input class="tinput" placeholder="Search staff by name..." oninput="filterCheckboxList(this,'mailSpecificStaff')"></div>
+      <div class="check-list" id="mailSpecificStaff" style="max-height:220px;">${STATE.staff.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(s=>`<label><input type="checkbox" value="${s.id}"> ${escapeHtml(s.name)}${s.active===false?' (inactive)':''}</label>`).join('')}</div>
+    </div>` : `<div class="form-row"><label style="font-weight:400;display:flex;gap:6px;"><input type="checkbox" id="mailActiveOnly" checked> Active staff only</label></div>`}` :
+    VIEW.mailRecipientType==='donors'? `<div class="form-row"><label>Which donors</label>
+      <select id="mailScopeMode" onchange="VIEW.mailScopeMode=this.value;renderContent();">
+        <option value="all" ${VIEW.mailScopeMode==='all'?'selected':''}>All donors</option>
+        <option value="specific" ${VIEW.mailScopeMode==='specific'?'selected':''}>Specific donors</option>
+      </select>
+    </div>
+    ${VIEW.mailScopeMode==='specific'? `<div class="form-row">
+      <div class="search-box"><input class="tinput" placeholder="Search donors by name..." oninput="filterCheckboxList(this,'mailSpecificDonors')"></div>
+      <div class="check-list" id="mailSpecificDonors" style="max-height:220px;">${STATE.donors.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(d=>`<label><input type="checkbox" value="${d.id}"> ${d.prefix?escapeHtml(d.prefix)+' ':''}${escapeHtml(d.name)}</label>`).join('') || '<div class="muted small">No donors on file yet.</div>'}</div>
+    </div>` : ''}` :
+    `<div class="form-row"><label>Which students</label>
       <select id="mailScopeMode" onchange="VIEW.mailScopeMode=this.value;renderContent();">
         <option value="all" ${VIEW.mailScopeMode==='all'?'selected':''}>All students</option>
         <option value="class" ${VIEW.mailScopeMode==='class'?'selected':''}>A specific class</option>
@@ -13477,18 +13603,18 @@ function renderMailingLabelsSection(){
     ${VIEW.mailScopeMode==='specific'? `<div class="form-row">
       <div class="search-box"><input class="tinput" placeholder="Search students..." oninput="filterCheckboxList(this,'mailSpecificStudents')"></div>
       <div class="check-list" id="mailSpecificStudents" style="max-height:220px;">${visibleStudents.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(s=>`<label><input type="checkbox" value="${s.id}"> ${escapeHtml(s.name)}${s.classId?' — '+escapeHtml(className(s.classId)):''}</label>`).join('')}</div>
-    </div>` : ''}` : `<div class="form-row"><label>Which staff</label>
-      <select id="mailScopeMode" onchange="VIEW.mailScopeMode=this.value;renderContent();">
-        <option value="all" ${VIEW.mailScopeMode==='all'?'selected':''}>All staff</option>
-        <option value="specific" ${VIEW.mailScopeMode==='specific'?'selected':''}>Specific staff</option>
-      </select>
-    </div>
-    ${VIEW.mailScopeMode==='specific'? `<div class="form-row">
-      <div class="search-box"><input class="tinput" placeholder="Search staff by name..." oninput="filterCheckboxList(this,'mailSpecificStaff')"></div>
-      <div class="check-list" id="mailSpecificStaff" style="max-height:220px;">${STATE.staff.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(s=>`<label><input type="checkbox" value="${s.id}"> ${escapeHtml(s.name)}${s.active===false?' (inactive)':''}</label>`).join('')}</div>
-    </div>` : `<div class="form-row"><label style="font-weight:400;display:flex;gap:6px;"><input type="checkbox" id="mailActiveOnly" checked> Active staff only</label></div>`}`}
+    </div>` : ''}`}
     <button class="btn" onclick="generateMailingPrint()">🖨 Generate</button>
   </div>`;
+}
+// Combines the prefix set in the student modal (Mr./Mrs./Rabbi/etc.) with a parent's name for
+// formal display — mailing labels/envelopes being the clearest use case, so a letter can go out
+// addressed "Rabbi & Mrs. Cohen" rather than just "Yankel Cohen." English only — Yiddish name
+// display (studentYiddishFullName) has its own separate formatting and shouldn't get an English
+// prefix mixed into it.
+function parentDisplayName(person){
+  if(!person || !person.name) return '';
+  return person.prefix ? `${person.prefix} ${person.name}` : person.name;
 }
 // A family's Yiddish last name is entered once (on the student record, shared for the whole
 // family) rather than separately for the student/mother/father — matching how everyone in a
@@ -13506,9 +13632,13 @@ function mailingRecipientLine(type, entity, useYiddish){
   if(type==='parents'){
     const names = (useYiddish
       ? [studentYiddishFullName(entity,'mother')||(entity.mother&&entity.mother.name), studentYiddishFullName(entity,'father')||(entity.father&&entity.father.name)]
-      : [entity.mother&&entity.mother.name, entity.father&&entity.father.name]
+      : [parentDisplayName(entity.mother), parentDisplayName(entity.father)]
     ).filter(Boolean);
     return { name: names.length? names.join(' & ') : `Parent/Guardian of ${entity.name}`, address: entity.address||'' };
+  }
+  if(type==='donors'){
+    const name = (useYiddish && entity.yiddishName) ? entity.yiddishName : (entity.prefix? `${entity.prefix} ${entity.name}` : entity.name);
+    return { name, address: entity.address||'' };
   }
   const name = (useYiddish && studentYiddishFullName(entity)) ? studentYiddishFullName(entity) : entity.name;
   return { name, address: entity.address||'' };
@@ -13530,6 +13660,18 @@ function generateMailingPrint(){
     } else {
       const activeOnly = document.getElementById('mailActiveOnly').checked;
       pool = STATE.staff.filter(s=>!activeOnly || s.active!==false);
+    }
+  } else if(type==='donors'){
+    // Same re-check pattern as staff above — trust the server-equivalent permission check, not
+    // just that the dropdown option happened to be hidden.
+    const canMailDonors = currentStaff().role==='Admin' || can('manageFundraising') || can('viewFundraisingReports');
+    if(!canMailDonors){ toast('You don\'t have permission to print donor mailing labels'); return; }
+    if(VIEW.mailScopeMode==='specific'){
+      const checked = [...document.querySelectorAll('#mailSpecificDonors input:checked')].map(el=>el.value);
+      if(!checked.length){ toast('Pick at least one donor'); return; }
+      pool = checked.map(id=>byId(STATE.donors,id)).filter(Boolean);
+    } else {
+      pool = STATE.donors.slice();
     }
   } else {
     // Every path here is scoped to studentsVisibleTo, not the full school — a restricted-access
@@ -16397,6 +16539,34 @@ function computeSearchResults(filters, visibleStudents){
     if(!visibleIds.has(c.studentId)) return;
     items.push({type:'Contact', date:c.date, studentId:c.studentId, staffId:c.staffId, title:`Parent contact — ${c.method}`, text:c.note||''});
   });
+  // Fundraising — same "only what they could already see" rule as everywhere else in this
+  // function: gated on the exact same permission check the Fundraising tab itself uses, so
+  // Search can never surface a donor's contact info or giving history to someone who couldn't
+  // otherwise open that tab at all.
+  if(currentStaff().role==='Admin' || can('manageFundraising') || can('viewFundraisingReports')){
+    STATE.donors.forEach(d=>{
+      items.push({type:'Donor', date:d.createdAt? d.createdAt.slice(0,10) : '', studentId:null, staffId:null,
+        title:(d.prefix?d.prefix+' ':'')+d.name, text:[d.email, d.phone, d.address, d.notes].filter(Boolean).join(' · ')});
+    });
+    STATE.pledges.forEach(p=>{
+      const donor = donorById(p.donorId); const target = p.campaignId? fundraisingCampaignById(p.campaignId) : fundraisingFundById(p.fundId);
+      items.push({type:'Pledge', date:p.pledgeDate, studentId:null, staffId:p.createdBy,
+        title:`${fmtMoney(p.amount)} pledged — ${donor?donor.name:'(deleted donor)'}`, text:[target?target.name:'', p.status, p.notes].filter(Boolean).join(' · ')});
+    });
+    STATE.donations.forEach(dn=>{
+      const donor = donorById(dn.donorId); const target = dn.campaignId? fundraisingCampaignById(dn.campaignId) : fundraisingFundById(dn.fundId);
+      items.push({type:'Donation', date:dn.date, studentId:null, staffId:dn.recordedBy,
+        title:`${fmtMoney(dn.amount)} donated — ${donor?donor.name:'(deleted donor)'}`, text:[target?target.name:'', dn.method, dn.notes].filter(Boolean).join(' · ')});
+    });
+    STATE.fundraisingCampaigns.forEach(c=>{
+      items.push({type:'Campaign', date:c.createdAt? c.createdAt.slice(0,10) : (c.startDate||''), studentId:null, staffId:null,
+        title:c.name, text:c.description||''});
+    });
+    STATE.fundraisingFunds.forEach(f=>{
+      items.push({type:'Fund', date:f.createdAt? f.createdAt.slice(0,10) : '', studentId:null, staffId:null,
+        title:f.name, text:f.description||''});
+    });
+  }
   items = items.filter(it=>{
     if(filters.studentId && it.studentId!==filters.studentId) return false;
     if(filters.type && it.type!==filters.type) return false;
@@ -16414,12 +16584,13 @@ function computeSearchResults(filters, visibleStudents){
 function renderSearch(){
   VIEW.search = VIEW.search || {q:'', studentId:'', type:'', from:'', to:''};
   const visible = studentsVisibleTo(VIEW.userId);
-  const kinds = [...new Set(['Note','Lesson Plan','Contact', ...STATE.reportTemplates.map(t=>t.kind)])];
+  const canSeeFundraising = currentStaff().role==='Admin' || can('manageFundraising') || can('viewFundraisingReports');
+  const kinds = [...new Set(['Note','Lesson Plan','Contact', ...STATE.reportTemplates.map(t=>t.kind), ...(canSeeFundraising? ['Donor','Pledge','Donation','Campaign','Fund'] : [])])];
   const results = computeSearchResults(VIEW.search, visible);
   return `
   <div class="card" style="margin-bottom:14px;">
     <div class="form-cols" style="grid-template-columns:2fr 1fr 1fr;">
-      <div class="form-row"><label>Keyword</label><input id="srchQ" value="${escapeHtml(VIEW.search.q)}" placeholder="Search notes, reports, lesson plans, contacts..." onkeypress="if(event.key==='Enter'){runSearch();}"></div>
+      <div class="form-row"><label>Keyword</label><input id="srchQ" value="${escapeHtml(VIEW.search.q)}" placeholder="Search notes, reports, lesson plans, contacts${canSeeFundraising?', donors, pledges, donations...':'...'}" onkeypress="if(event.key==='Enter'){runSearch();}"></div>
       <div class="form-row"><label>Student</label><select id="srchStudent"><option value="">All students</option>${visible.map(s=>`<option value="${s.id}" ${s.id===VIEW.search.studentId?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}</select></div>
       <div class="form-row"><label>Type</label><select id="srchType"><option value="">All types</option>${kinds.map(t=>`<option ${t===VIEW.search.type?'selected':''}>${escapeHtml(t)}</option>`).join('')}</select></div>
     </div>
@@ -17475,12 +17646,6 @@ async function startTuitionCheckout(studentId){
   if(res.ok && res.body && res.body.url){ window.location.href = res.body.url; return; }
   toast((res.body && res.body.error) || 'Online payment isn\'t live yet.');
 }
-function openOnlineDonationLinkModal(){
-  showModal(`<h3>🔗 Online donation link</h3>
-    <div class="small" style="margin-bottom:8px;">Your payment processor is connected and enabled, but the real hosted donation page/checkout still needs its follow-up pass built against ${escapeHtml(STATE.paymentProcessor.provider||'your processor')}'s actual API before a real link exists here.</div>
-    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
-}
-
 // ==================== Weekly compliance report — configurable schedule ====================
 function saveWeeklyComplianceSchedule(){
   if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
@@ -17621,6 +17786,657 @@ function saveManualFamily(){
   closeModal(); saveState(); renderContent();
   toast('Family linked');
 }
+// =============== FUNDRAISING ===============
+// A separate module from tuition/Billing above: donors giving money to the school by choice (a
+// gala, a building campaign, a general appeal), not families paying what they owe. See the
+// STATE.fundraising*/donors/pledges/donations init comment for the full reasoning on why this is
+// its own set of records rather than folded into billing or students.
+function requireFundraisingEdit(){
+  if(currentStaff().role==='Admin' || can('manageFundraising')) return true;
+  toast("You don't have permission to edit Fundraising — ask an Admin to grant it in Settings → Roles & Permissions.");
+  return false;
+}
+function fundraisingFundById(id){ return byId(STATE.fundraisingFunds, id); }
+function fundraisingCampaignById(id){ return byId(STATE.fundraisingCampaigns, id); }
+function donorById(id){ return byId(STATE.donors, id); }
+// A pledge or donation can be tied to a campaign directly, or given straight to a fund with no
+// specific campaign (general/undesignated giving) — this resolves either shape down to "which
+// fund does this ultimately count toward," since a fund's own total should include both paths.
+function donationFundId(donation){
+  if(donation.fundId) return donation.fundId;
+  const c = fundraisingCampaignById(donation.campaignId);
+  return c ? c.fundId : null;
+}
+function pledgeFundId(pledge){
+  if(pledge.fundId) return pledge.fundId;
+  const c = fundraisingCampaignById(pledge.campaignId);
+  return c ? c.fundId : null;
+}
+function fundTotalRaised(fundId){ return STATE.donations.filter(d=>donationFundId(d)===fundId).reduce((sum,d)=>sum+(d.amount||0),0); }
+function fundTotalPledged(fundId){ return STATE.pledges.filter(p=>p.status!=='cancelled' && pledgeFundId(p)===fundId).reduce((sum,p)=>sum+(p.amount||0),0); }
+function campaignTotalRaised(campaignId){ return STATE.donations.filter(d=>d.campaignId===campaignId).reduce((sum,d)=>sum+(d.amount||0),0); }
+function campaignTotalPledged(campaignId){ return STATE.pledges.filter(p=>p.status!=='cancelled' && p.campaignId===campaignId).reduce((sum,p)=>sum+(p.amount||0),0); }
+// A pledge's own "how much has actually come in yet" — donations linked to it directly via
+// pledgeId, not just any donation from the same donor to the same campaign/fund (that could
+// easily be a separate, unrelated gift from the same generous donor).
+function pledgeFulfilledAmount(pledgeId){ return STATE.donations.filter(d=>d.pledgeId===pledgeId).reduce((sum,d)=>sum+(d.amount||0),0); }
+function donorTotalGiven(donorId){ return STATE.donations.filter(d=>d.donorId===donorId).reduce((sum,d)=>sum+(d.amount||0),0); }
+function donorTotalPledgedOutstanding(donorId){
+  return STATE.pledges.filter(p=>p.donorId===donorId && p.status!=='cancelled').reduce((sum,p)=>sum+Math.max(0,p.amount-pledgeFulfilledAmount(p.id)),0);
+}
+// Online-giving link — the Fundraising-side UI hook for the payment-processor scaffolding, same
+// idea as tuition's openPayNowModal (see payments.js and STATE.paymentProcessor). No real hosted
+// donation page/checkout exists yet; this says so honestly rather than handing out a link that
+// would 404 or silently fail once clicked.
+function openOnlineDonationLinkModal(){
+  showModal(`<h3>🔗 Online donation link</h3>
+    <div class="small" style="margin-bottom:8px;">Your payment processor is connected and enabled, but the real hosted donation page/checkout still needs its follow-up pass built against ${escapeHtml(STATE.paymentProcessor.provider||'your processor')}'s actual API before a real link exists here.</div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+function renderFundraising(){
+  const editable = currentStaff().role==='Admin' || can('manageFundraising');
+  if(!VIEW.fundraisingTab) VIEW.fundraisingTab = 'dashboard';
+  const tabs = [
+    {id:'dashboard', label:'📊 Dashboard'}, {id:'funds', label:'Funds'}, {id:'campaigns', label:'Campaigns'},
+    {id:'pledges', label:'Pledges'}, {id:'donations', label:'Donations'}, {id:'donors', label:'Donors'},
+  ];
+  return `<h2 style="margin-top:0;">💵 Fundraising</h2>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">
+    ${tabs.map(t=>`<button class="settings-pill ${VIEW.fundraisingTab===t.id?'active':''}" onclick="VIEW.fundraisingTab='${t.id}';renderContent();">${t.label}</button>`).join('')}
+  </div>
+  ${!editable? `<div class="card" style="background:#F6F1E7;border:1px solid #E9D9BC;margin-bottom:12px;"><div class="small">👁️ View-only access — you can see funds, campaigns, pledges, donations, and donors, but adding or editing is restricted.</div></div>` : ''}
+  ${VIEW.fundraisingTab==='dashboard'? renderFundraisingDashboard() :
+    VIEW.fundraisingTab==='funds'? renderFundraisingFunds(editable) :
+    VIEW.fundraisingTab==='campaigns'? renderFundraisingCampaigns(editable) :
+    VIEW.fundraisingTab==='pledges'? renderFundraisingPledges(editable) :
+    VIEW.fundraisingTab==='donations'? renderFundraisingDonations(editable) :
+    VIEW.fundraisingTab==='donors'? renderFundraisingDonors(editable) : ''}`;
+}
+function renderFundraisingDashboard(){
+  const totalRaised = STATE.donations.reduce((sum,d)=>sum+(d.amount||0),0);
+  const totalPledgedOutstanding = STATE.pledges.filter(p=>p.status!=='cancelled').reduce((sum,p)=>sum+Math.max(0,p.amount-pledgeFulfilledAmount(p.id)),0);
+  const donorCount = new Set(STATE.donations.map(d=>d.donorId)).size;
+  const recentDonations = STATE.donations.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,8);
+  const topDonorTotals = {};
+  STATE.donations.forEach(d=>{ if(!d.donorId) return; topDonorTotals[d.donorId] = (topDonorTotals[d.donorId]||0) + (d.amount||0); });
+  const topDonors = Object.entries(topDonorTotals).map(([donorId,total])=>({donorId,total})).sort((a,b)=>b.total-a.total).slice(0,5);
+  const activeFunds = STATE.fundraisingFunds.filter(f=>f.active!==false);
+  const activeCampaigns = STATE.fundraisingCampaigns.filter(c=>c.active!==false);
+  return `
+  <div class="card" style="margin-bottom:14px;">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn-ghost btn btn-sm" onclick="printFundraisingDashboard()">🖨 Print summary report</button></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
+      <div><div class="muted small">TOTAL RAISED (ALL TIME)</div><div style="font-size:24px;font-weight:700;color:#1E7A4C;">${fmtMoney(totalRaised)}</div></div>
+      <div><div class="muted small">PLEDGED, NOT YET RECEIVED</div><div style="font-size:24px;font-weight:700;color:#B5720A;">${fmtMoney(totalPledgedOutstanding)}</div></div>
+      <div><div class="muted small">DONORS TO DATE</div><div style="font-size:24px;font-weight:700;">${donorCount}</div></div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <div><h3 style="margin:0;">💳 Online giving</h3><div class="muted small" style="margin-top:2px;">${STATE.paymentProcessor.enabled? 'Donors can give online — share the link below.' : 'Not connected yet — donations are recorded manually for now.'}</div></div>
+      ${STATE.paymentProcessor.enabled
+        ? `<button class="btn btn-sm" onclick="openOnlineDonationLinkModal()">🔗 Get donation link</button>`
+        : (currentStaff().role==='Admin' || can('manageBilling'))? `<button class="btn-ghost btn btn-sm" onclick="VIEW.tab='settings';VIEW.settingsSection='payments';renderContent();">⚙ Connect a processor</button>` : ''}
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px;">
+    <div class="card">
+      <h3 style="margin-top:0;">By fund</h3>
+      ${activeFunds.length? activeFunds.map(f=>{
+        const raised = fundTotalRaised(f.id);
+        const pct = f.goalAmount>0? Math.min(100, Math.round(raised/f.goalAmount*100)) : null;
+        return `<div style="margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><strong>${escapeHtml(f.name)}</strong><span class="muted">${fmtMoney(raised)}${f.goalAmount>0?` of ${fmtMoney(f.goalAmount)}`:''}</span></div>
+          ${pct!=null? `<div style="background:var(--surface-2);border-radius:6px;height:12px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:${complianceRingColor(pct)};"></div></div>` : ''}
+        </div>`;
+      }).join('') : '<div class="empty-state">No funds set up yet.</div>'}
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;">Active campaigns</h3>
+      ${activeCampaigns.length? activeCampaigns.map(c=>{
+        const raised = campaignTotalRaised(c.id);
+        const pct = c.goalAmount>0? Math.min(100, Math.round(raised/c.goalAmount*100)) : null;
+        return `<div style="margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><strong>${escapeHtml(c.name)}</strong><span class="muted">${fmtMoney(raised)}${c.goalAmount>0?` of ${fmtMoney(c.goalAmount)}`:''}</span></div>
+          ${pct!=null? `<div style="background:var(--surface-2);border-radius:6px;height:12px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:${complianceRingColor(pct)};"></div></div>` : ''}
+        </div>`;
+      }).join('') : '<div class="empty-state">No active campaigns.</div>'}
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+    <div class="card">
+      <h3 style="margin-top:0;">Recent donations</h3>
+      ${recentDonations.length? `<table><thead><tr><th>Date</th><th>Donor</th><th>Amount</th></tr></thead><tbody>
+        ${recentDonations.map(d=>{ const donor=donorById(d.donorId); return `<tr><td class="small">${fmtDate(d.date)}</td><td>${donor?escapeHtml(donor.name):'<span class="muted">—</span>'}</td><td>${fmtMoney(d.amount)}</td></tr>`; }).join('')}
+      </tbody></table>` : '<div class="empty-state">No donations recorded yet.</div>'}
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;">Top donors (all time)</h3>
+      ${topDonors.length? `<table><thead><tr><th>Donor</th><th>Total given</th></tr></thead><tbody>
+        ${topDonors.map(t=>{ const donor=donorById(t.donorId); return `<tr><td>${donor?escapeHtml(donor.name):'<span class="muted">Unknown</span>'}</td><td>${fmtMoney(t.total)}</td></tr>`; }).join('')}
+      </tbody></table>` : '<div class="empty-state">No donations recorded yet.</div>'}
+    </div>
+  </div>`;
+}
+// A school-wide fundraising summary for a board or committee — same numbers as the on-screen
+// Dashboard (total raised, pledged outstanding, by-fund and by-campaign breakdowns, recent
+// donations, top donors), laid out as a real printable report rather than requiring someone to
+// screenshot the live dashboard.
+function printFundraisingDashboard(){
+  const totalRaised = STATE.donations.reduce((sum,d)=>sum+(d.amount||0),0);
+  const totalPledgedOutstanding = STATE.pledges.filter(p=>p.status!=='cancelled').reduce((sum,p)=>sum+Math.max(0,p.amount-pledgeFulfilledAmount(p.id)),0);
+  const donorCount = new Set(STATE.donations.map(d=>d.donorId)).size;
+  const recentDonations = STATE.donations.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,15);
+  const topDonorTotals = {};
+  STATE.donations.forEach(d=>{ if(!d.donorId) return; topDonorTotals[d.donorId] = (topDonorTotals[d.donorId]||0) + (d.amount||0); });
+  const topDonors = Object.entries(topDonorTotals).map(([donorId,total])=>({donorId,total})).sort((a,b)=>b.total-a.total).slice(0,10);
+  const activeFunds = STATE.fundraisingFunds.filter(f=>f.active!==false);
+  const activeCampaigns = STATE.fundraisingCampaigns.filter(c=>c.active!==false);
+  const body = `
+    <h2 style="margin-top:0;">Fundraising Summary</h2>
+    <div class="muted small" style="margin-bottom:16px;">As of ${fmtDate(todayISO())}</div>
+    <div style="display:flex;gap:32px;margin-bottom:20px;">
+      <div><div class="muted small">TOTAL RAISED (ALL TIME)</div><div style="font-size:20px;font-weight:700;color:#1E7A4C;">${fmtMoney(totalRaised)}</div></div>
+      <div><div class="muted small">PLEDGED, NOT YET RECEIVED</div><div style="font-size:20px;font-weight:700;color:#B5720A;">${fmtMoney(totalPledgedOutstanding)}</div></div>
+      <div><div class="muted small">DONORS TO DATE</div><div style="font-size:20px;font-weight:700;">${donorCount}</div></div>
+    </div>
+    <h4 style="margin:16px 0 6px;">By fund</h4>
+    <table><thead><tr><th>Fund</th><th>Raised</th><th>Goal</th></tr></thead><tbody>
+      ${activeFunds.length? activeFunds.map(f=>`<tr><td>${escapeHtml(f.name)}</td><td>${fmtMoney(fundTotalRaised(f.id))}</td><td>${f.goalAmount>0?fmtMoney(f.goalAmount):'—'}</td></tr>`).join('') : '<tr><td colspan="3" class="muted">No funds set up</td></tr>'}
+    </tbody></table>
+    <h4 style="margin:16px 0 6px;">Active campaigns</h4>
+    <table><thead><tr><th>Campaign</th><th>Raised</th><th>Pledged</th><th>Goal</th></tr></thead><tbody>
+      ${activeCampaigns.length? activeCampaigns.map(c=>`<tr><td>${escapeHtml(c.name)}</td><td>${fmtMoney(campaignTotalRaised(c.id))}</td><td>${fmtMoney(campaignTotalPledged(c.id))}</td><td>${c.goalAmount>0?fmtMoney(c.goalAmount):'—'}</td></tr>`).join('') : '<tr><td colspan="4" class="muted">No active campaigns</td></tr>'}
+    </tbody></table>
+    <h4 style="margin:16px 0 6px;">Recent donations</h4>
+    <table><thead><tr><th>Date</th><th>Donor</th><th>Amount</th></tr></thead><tbody>
+      ${recentDonations.length? recentDonations.map(d=>{ const donor=donorById(d.donorId); return `<tr><td>${fmtDate(d.date)}</td><td>${donor?escapeHtml(donor.name):'—'}</td><td>${fmtMoney(d.amount)}</td></tr>`; }).join('') : '<tr><td colspan="3" class="muted">No donations recorded</td></tr>'}
+    </tbody></table>
+    <h4 style="margin:16px 0 6px;">Top donors (all time)</h4>
+    <table><thead><tr><th>Donor</th><th>Total given</th></tr></thead><tbody>
+      ${topDonors.length? topDonors.map(t=>{ const donor=donorById(t.donorId); return `<tr><td>${donor?escapeHtml(donor.name):'Unknown'}</td><td>${fmtMoney(t.total)}</td></tr>`; }).join('') : '<tr><td colspan="2" class="muted">No donations recorded</td></tr>'}
+    </tbody></table>`;
+  const win = window.open('', '_blank');
+  win.document.write(letterheadHtml(body, 'Fundraising Summary'));
+  win.document.close();
+}
+function renderFundraisingFunds(editable){
+  const funds = STATE.fundraisingFunds.slice().sort((a,b)=>(b.active!==false)-(a.active!==false) || a.name.localeCompare(b.name));
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <div class="muted small">A fund is a named bucket money is designated toward — General Fund, Scholarship Fund, Building Fund. A campaign (see the Campaigns tab) is a time-bound effort that feeds into one fund.</div>
+    ${editable? `<button class="btn" onclick="openFundraisingFundModal()">+ New fund</button>` : ''}
+  </div>
+  ${funds.length? funds.map(f=>{
+    const raised = fundTotalRaised(f.id);
+    const pledged = fundTotalPledged(f.id);
+    return `<div class="card" style="margin-bottom:12px;${f.active===false?'opacity:.6;':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div><strong style="font-size:16px;">${escapeHtml(f.name)}</strong>${f.active===false?' <span class="pill pill-grey">Inactive</span>':''}</div>
+        ${editable? `<div style="display:flex;gap:6px;"><button class="btn-ghost btn btn-sm" onclick="openFundraisingFundModal('${f.id}')">✎ Edit</button><button class="btn-ghost btn btn-sm" style="color:#B3261E;" onclick="deleteFundraisingFund('${f.id}')">🗑 Delete</button></div>` : ''}
+      </div>
+      ${f.description? `<div class="small muted" style="margin-top:4px;">${escapeHtml(f.description)}</div>` : ''}
+      <div style="display:flex;gap:24px;margin-top:10px;">
+        <div><div class="muted small">RAISED</div><div style="font-weight:700;color:#1E7A4C;">${fmtMoney(raised)}</div></div>
+        ${pledged>0? `<div><div class="muted small">PLEDGED (INCL. UNFULFILLED)</div><div style="font-weight:700;color:#B5720A;">${fmtMoney(pledged)}</div></div>` : ''}
+        ${f.goalAmount>0? `<div><div class="muted small">GOAL</div><div style="font-weight:700;">${fmtMoney(f.goalAmount)}</div></div>` : ''}
+      </div>
+    </div>`;
+  }).join('') : '<div class="card"><div class="empty-state">No funds set up yet.</div></div>'}`;
+}
+function openFundraisingFundModal(id){
+  if(!requireFundraisingEdit()) return;
+  const f = id? byId(STATE.fundraisingFunds, id) : {id:uid('fund'), name:'', description:'', goalAmount:0, active:true};
+  showModal(`<h3>${id?'Edit':'New'} fund</h3>
+    <div class="form-row"><label>Name</label><input id="fundName" value="${escapeHtml(f.name)}" placeholder="e.g. General Fund"></div>
+    <div class="form-row"><label>Description <span class="small">(optional)</span></label><textarea id="fundDesc">${escapeHtml(f.description||'')}</textarea></div>
+    <div class="form-row"><label>Goal amount <span class="small">(optional — leave 0 for no goal)</span></label><input type="number" min="0" step="1" id="fundGoal" value="${f.goalAmount||0}" style="max-width:160px;"></div>
+    ${id? `<label style="font-weight:400;display:flex;gap:6px;margin-bottom:10px;"><input type="checkbox" id="fundActive" ${f.active!==false?'checked':''}> Active</label>` : ''}
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="saveFundraisingFund('${f.id}',${!id})">Save</button></div>`);
+}
+function saveFundraisingFund(id, isNew){
+  if(!requireFundraisingEdit()) return;
+  const name = document.getElementById('fundName').value.trim();
+  if(!name){ toast('Enter a name'); return; }
+  const data = { name, description: document.getElementById('fundDesc').value.trim(), goalAmount: Number(document.getElementById('fundGoal').value)||0 };
+  if(isNew){ STATE.fundraisingFunds.push({id, ...data, active:true, createdAt:new Date().toISOString()}); }
+  else { const f = byId(STATE.fundraisingFunds,id); Object.assign(f, data); const activeEl=document.getElementById('fundActive'); if(activeEl) f.active = activeEl.checked; }
+  saveState(); closeModal(); renderContent(); toast('Saved');
+}
+function deleteFundraisingFund(id){
+  if(!requireFundraisingEdit()) return;
+  const inUse = STATE.fundraisingCampaigns.some(c=>c.fundId===id) || STATE.pledges.some(p=>p.fundId===id) || STATE.donations.some(d=>d.fundId===id);
+  if(inUse){ toast('This fund has campaigns, pledges, or donations tied to it — mark it Inactive instead of deleting, so history stays intact.'); return; }
+  showDangerConfirm('Delete this fund?', ()=>{ STATE.fundraisingFunds = STATE.fundraisingFunds.filter(f=>f.id!==id); saveState(); closeModal(); renderContent(); }, 'Delete fund');
+}
+function renderFundraisingCampaigns(editable){
+  const campaigns = STATE.fundraisingCampaigns.slice().sort((a,b)=>(b.active!==false)-(a.active!==false) || (b.startDate||'').localeCompare(a.startDate||''));
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <div class="muted small">A time-bound fundraising effort — a gala, a building campaign, an annual appeal. Optionally tied to a fund; can also stand on its own.</div>
+    ${editable? `<button class="btn" onclick="openFundraisingCampaignModal()">+ New campaign</button>` : ''}
+  </div>
+  ${campaigns.length? campaigns.map(c=>{
+    const fund = c.fundId ? fundraisingFundById(c.fundId) : null;
+    const raised = campaignTotalRaised(c.id);
+    const pledged = campaignTotalPledged(c.id);
+    return `<div class="card" style="margin-bottom:12px;${c.active===false?'opacity:.6;':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div><strong style="font-size:16px;">${escapeHtml(c.name)}</strong> ${c.fundId? `<span class="pill pill-grey" style="font-size:10px;">${fund?escapeHtml(fund.name):'(fund deleted)'}</span>` : ''}${c.active===false?' <span class="pill pill-grey">Inactive</span>':''}</div>
+        ${editable? `<div style="display:flex;gap:6px;"><button class="btn-ghost btn btn-sm" onclick="openFundraisingCampaignModal('${c.id}')">✎ Edit</button><button class="btn-ghost btn btn-sm" style="color:#B3261E;" onclick="deleteFundraisingCampaign('${c.id}')">🗑 Delete</button></div>` : ''}
+      </div>
+      <div class="small muted" style="margin-top:2px;">${c.startDate?fmtDate(c.startDate):'No start date'}${c.endDate?' – '+fmtDate(c.endDate):''}</div>
+      ${c.description? `<div class="small muted" style="margin-top:4px;">${escapeHtml(c.description)}</div>` : ''}
+      <div style="display:flex;gap:24px;margin-top:10px;">
+        <div><div class="muted small">RAISED</div><div style="font-weight:700;color:#1E7A4C;">${fmtMoney(raised)}</div></div>
+        ${pledged>0? `<div><div class="muted small">PLEDGED (INCL. UNFULFILLED)</div><div style="font-weight:700;color:#B5720A;">${fmtMoney(pledged)}</div></div>` : ''}
+        ${c.goalAmount>0? `<div><div class="muted small">GOAL</div><div style="font-weight:700;">${fmtMoney(c.goalAmount)}</div></div>` : ''}
+      </div>
+    </div>`;
+  }).join('') : '<div class="card"><div class="empty-state">No campaigns yet.</div></div>'}`;
+}
+function openFundraisingCampaignModal(id){
+  if(!requireFundraisingEdit()) return;
+  const c = id? byId(STATE.fundraisingCampaigns, id) : {id:uid('camp'), name:'', fundId:'', goalAmount:0, startDate:'', endDate:'', description:'', active:true};
+  showModal(`<h3>${id?'Edit':'New'} campaign</h3>
+    <div class="form-row"><label>Name</label><input id="campName" value="${escapeHtml(c.name)}" placeholder="e.g. Annual Gala 2026"></div>
+    <div class="form-row"><label>Fund <span class="small">(optional — can assign or change later)</span></label><select id="campFund"><option value="">No fund (stands on its own)</option>${STATE.fundraisingFunds.map(f=>`<option value="${f.id}" ${c.fundId===f.id?'selected':''}>${escapeHtml(f.name)}</option>`).join('')}</select></div>
+    <div class="form-cols">
+      <div class="form-row"><label>Start date</label><input type="date" id="campStart" value="${c.startDate||''}"></div>
+      <div class="form-row"><label>End date</label><input type="date" id="campEnd" value="${c.endDate||''}"></div>
+    </div>
+    <div class="form-row"><label>Goal amount <span class="small">(optional)</span></label><input type="number" min="0" step="1" id="campGoal" value="${c.goalAmount||0}" style="max-width:160px;"></div>
+    <div class="form-row"><label>Description <span class="small">(optional)</span></label><textarea id="campDesc">${escapeHtml(c.description||'')}</textarea></div>
+    ${id? `<label style="font-weight:400;display:flex;gap:6px;margin-bottom:10px;"><input type="checkbox" id="campActive" ${c.active!==false?'checked':''}> Active</label>` : ''}
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="saveFundraisingCampaign('${c.id}',${!id})">Save</button></div>`);
+}
+function saveFundraisingCampaign(id, isNew){
+  if(!requireFundraisingEdit()) return;
+  const name = document.getElementById('campName').value.trim();
+  if(!name){ toast('Enter a name'); return; }
+  const fundId = document.getElementById('campFund').value;
+  const data = { name, fundId, startDate: document.getElementById('campStart').value, endDate: document.getElementById('campEnd').value,
+    goalAmount: Number(document.getElementById('campGoal').value)||0, description: document.getElementById('campDesc').value.trim() };
+  if(isNew){ STATE.fundraisingCampaigns.push({id, ...data, active:true, createdAt:new Date().toISOString()}); }
+  else { const c = byId(STATE.fundraisingCampaigns,id); Object.assign(c, data); const activeEl=document.getElementById('campActive'); if(activeEl) c.active = activeEl.checked; }
+  saveState(); closeModal(); renderContent(); toast('Saved');
+}
+function deleteFundraisingCampaign(id){
+  if(!requireFundraisingEdit()) return;
+  const inUse = STATE.pledges.some(p=>p.campaignId===id) || STATE.donations.some(d=>d.campaignId===id);
+  if(inUse){ toast('This campaign has pledges or donations tied to it — mark it Inactive instead of deleting, so history stays intact.'); return; }
+  showDangerConfirm('Delete this campaign?', ()=>{ STATE.fundraisingCampaigns = STATE.fundraisingCampaigns.filter(c=>c.id!==id); saveState(); closeModal(); renderContent(); }, 'Delete campaign');
+}
+function renderFundraisingDonors(editable){
+  const q = (VIEW.donorSearch||'').trim().toLowerCase();
+  const donors = STATE.donors.filter(d=>!q || [d.name, d.prefix, d.yiddishName, d.email, d.phone, d.notes].filter(Boolean).some(v=>v.toLowerCase().includes(q))).sort((a,b)=>a.name.localeCompare(b.name));
+  if(VIEW.openDonorId && !byId(STATE.donors, VIEW.openDonorId)) VIEW.openDonorId = null;
+  if(VIEW.openDonorId) return renderDonorDetail(VIEW.openDonorId, editable);
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <div class="search-box" style="margin-bottom:0;max-width:280px;"><input placeholder="Search donors by name, email, phone..." value="${escapeHtml(VIEW.donorSearch||'')}" oninput="VIEW.donorSearch=this.value;renderContent();"></div>
+    ${editable? `<button class="btn" onclick="openDonorModal()">+ New donor</button>` : ''}
+  </div>
+  ${donors.length? `<table><thead><tr><th>Name</th><th>Type</th><th>Email</th><th>Phone</th><th>Total given</th><th>Outstanding pledges</th></tr></thead><tbody>
+    ${donors.map(d=>`<tr style="cursor:pointer;" onclick="VIEW.openDonorId='${d.id}';renderContent();">
+      <td><strong>${d.prefix?escapeHtml(d.prefix)+' ':''}${escapeHtml(d.name)}</strong>${d.yiddishName?` <span class="small muted">(<bdi dir="rtl">${escapeHtml(d.yiddishName)}</bdi>)</span>`:''}</td>
+      <td class="small">${d.type==='organization'?'Organization':d.type==='foundation'?'Foundation':'Individual'}</td>
+      <td class="small">${escapeHtml(d.email||'')||'<span class="muted">—</span>'}</td>
+      <td class="small">${escapeHtml(d.phone||'')||'<span class="muted">—</span>'}</td>
+      <td>${fmtMoney(donorTotalGiven(d.id))}</td>
+      <td>${donorTotalPledgedOutstanding(d.id)>0? fmtMoney(donorTotalPledgedOutstanding(d.id)) : '<span class="muted">—</span>'}</td>
+    </tr>`).join('')}
+  </tbody></table>` : `<div class="card"><div class="empty-state">${q?'No donors match your search.':'No donors on file yet.'}</div></div>`}`;
+}
+function renderDonorDetail(donorId, editable){
+  const d = byId(STATE.donors, donorId); if(!d) return '';
+  const pledges = STATE.pledges.filter(p=>p.donorId===donorId).sort((a,b)=>(b.pledgeDate||'').localeCompare(a.pledgeDate||''));
+  const donations = STATE.donations.filter(dn=>dn.donorId===donorId).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  return `<button class="btn-ghost btn btn-sm" style="margin-bottom:12px;" onclick="VIEW.openDonorId=null;renderContent();">← All donors</button>
+  <div class="card" style="margin-bottom:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+      <div>
+        <h3 style="margin:0 0 4px;">${d.prefix?escapeHtml(d.prefix)+' ':''}${escapeHtml(d.name)}${d.yiddishName?` <span class="small" style="font-weight:400;">(<bdi dir="rtl">${escapeHtml(d.yiddishName)}</bdi>)</span>`:''}</h3>
+        <div class="small muted">${d.type==='organization'?'Organization':d.type==='foundation'?'Foundation':'Individual'}${d.email?' · '+escapeHtml(d.email):''}${d.phone?' · '+escapeHtml(d.phone):''}</div>
+        ${d.address? `<div class="small muted" style="margin-top:2px;">${escapeHtml(d.address)}</div>` : ''}
+        ${d.dob? `<div class="small muted" style="margin-top:2px;">DOB: ${fmtDate(d.dob)}${d.hebrewDob? ` · Yiddish DOB: ${containsHebrew(d.hebrewDob)?`<bdi dir="rtl">${escapeHtml(d.hebrewDob)}</bdi>`:escapeHtml(d.hebrewDob)}` : ''}</div>` : ''}
+      </div>
+      ${editable? `<div style="display:flex;gap:6px;"><button class="btn-ghost btn btn-sm" onclick="printDonorStatement('${d.id}')">🖨 Print statement</button><button class="btn-ghost btn btn-sm" onclick="openDonorModal('${d.id}')">✎ Edit</button><button class="btn-ghost btn btn-sm" style="color:#B3261E;" onclick="deleteDonor('${d.id}')">🗑 Delete</button></div>` : `<button class="btn-ghost btn btn-sm" onclick="printDonorStatement('${d.id}')">🖨 Print statement</button>`}
+    </div>
+    ${d.notes? `<div class="small muted" style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px;">${escapeHtml(d.notes)}</div>` : ''}
+    <div style="display:flex;gap:24px;margin-top:12px;">
+      <div><div class="muted small">TOTAL GIVEN</div><div style="font-weight:700;color:#1E7A4C;">${fmtMoney(donorTotalGiven(d.id))}</div></div>
+      <div><div class="muted small">OUTSTANDING PLEDGES</div><div style="font-weight:700;color:#B5720A;">${fmtMoney(donorTotalPledgedOutstanding(d.id))}</div></div>
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px;">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><h3 style="margin:0;">Pledges</h3>${editable?`<button class="btn-ghost btn btn-sm" onclick="openPledgeModal(null,'${d.id}')">+ Add</button>`:''}</div>
+      ${pledges.length? pledges.map(p=>{
+        const target = p.campaignId? fundraisingCampaignById(p.campaignId) : fundraisingFundById(p.fundId);
+        const fulfilled = pledgeFulfilledAmount(p.id);
+        return `<div style="padding:8px 0;border-bottom:1px solid var(--line);${editable?'cursor:pointer;':''}" ${editable?`onclick="openPledgeModal('${p.id}')"`:''}>
+          <div style="display:flex;justify-content:space-between;"><strong>${fmtMoney(p.amount)}</strong><span class="small muted">${p.pledgeDate?fmtDate(p.pledgeDate):''}</span></div>
+          <div class="small muted">${target?escapeHtml(target.name):'(deleted)'} ${p.status==='cancelled'?'<span class="pill pill-grey">Cancelled</span>':fulfilled>=p.amount?'<span class="pill" style="background:#E9F3EE;color:#1E7B4D;">Fulfilled</span>':fulfilled>0?`<span class="pill pill-amber">${fmtMoney(fulfilled)} received</span>`:''}</div>
+        </div>`;
+      }).join('') : '<div class="muted small">No pledges yet.</div>'}
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><h3 style="margin:0;">Donations</h3>${editable?`<button class="btn-ghost btn btn-sm" onclick="openDonationModal(null,'${d.id}')">+ Add</button>`:''}</div>
+      ${donations.length? donations.map(dn=>{
+        const target = dn.campaignId? fundraisingCampaignById(dn.campaignId) : fundraisingFundById(dn.fundId);
+        return `<div style="padding:8px 0;border-bottom:1px solid var(--line);${editable?'cursor:pointer;':''}" ${editable?`onclick="openDonationModal('${dn.id}')"`:''}>
+          <div style="display:flex;justify-content:space-between;"><strong>${fmtMoney(dn.amount)}</strong><span class="small muted">${fmtDate(dn.date)}</span></div>
+          <div class="small muted">${target?escapeHtml(target.name):'(deleted)'}${dn.method?' · '+escapeHtml(dn.method):''}${dn.receiptSent?' · ✓ Receipt sent':''}</div>
+        </div>`;
+      }).join('') : '<div class="muted small">No donations yet.</div>'}
+    </div>
+  </div>`;
+}
+// A donor-facing giving statement — the letterhead-branded printout a donor would actually want
+// to keep for their own tax records: their name/address, every donation itemized (date, amount,
+// method, what it was for), outstanding pledges below that (clearly separate from actual gifts,
+// since a pledge isn't money received yet), and a total given for easy year-end reference. The
+// "no goods or services" line is the common boilerplate nonprofits use on a donation receipt —
+// shown here as a reasonable default, but this isn't tax/legal advice; check the exact wording
+// your accountant or the IRS's own guidance on charitable-contribution receipts wants for your
+// organization before relying on this for real receipts.
+function printDonorStatement(donorId){
+  const d = byId(STATE.donors, donorId); if(!d) return;
+  const donations = STATE.donations.filter(dn=>dn.donorId===donorId).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const pledges = STATE.pledges.filter(p=>p.donorId===donorId && p.status!=='cancelled').sort((a,b)=>(a.pledgeDate||'').localeCompare(b.pledgeDate||''));
+  const totalGiven = donorTotalGiven(donorId);
+  const donationRows = donations.map(dn=>{
+    const target = dn.campaignId? fundraisingCampaignById(dn.campaignId) : (dn.fundId? fundraisingFundById(dn.fundId) : null);
+    return `<tr><td>${fmtDate(dn.date)}</td><td>${target?escapeHtml(target.name):'General'}</td><td>${escapeHtml(dn.method||'')}</td><td>${fmtMoney(dn.amount)}</td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">No donations on file</td></tr>';
+  const pledgeRows = pledges.map(p=>{
+    const target = p.campaignId? fundraisingCampaignById(p.campaignId) : (p.fundId? fundraisingFundById(p.fundId) : null);
+    const fulfilled = pledgeFulfilledAmount(p.id);
+    return `<tr><td>${fmtDate(p.pledgeDate)}</td><td>${target?escapeHtml(target.name):'General'}</td><td>${fmtMoney(p.amount)}</td><td>${fulfilled>=p.amount?'Fulfilled':fulfilled>0?`${fmtMoney(fulfilled)} received`:'Outstanding'}</td></tr>`;
+  }).join('');
+  const body = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:18px;">
+      <h2 style="margin:0;">Giving Statement</h2>
+      <div class="small muted" style="text-align:right;">Statement date: ${fmtDate(todayISO())}</div>
+    </div>
+    <div style="margin-bottom:18px;">
+      <div class="small" style="text-transform:uppercase;letter-spacing:.04em;color:#655C6D;font-weight:700;margin-bottom:3px;">Donor</div>
+      <div style="font-weight:600;">${d.prefix?escapeHtml(d.prefix)+' ':''}${escapeHtml(d.name)}</div>
+      ${d.address? `<div>${formatAddressForPrint(d.address)}</div>` : ''}
+    </div>
+    <h4 style="margin:16px 0 6px;">Donations received</h4>
+    <table><thead><tr><th>Date</th><th>For</th><th>Method</th><th>Amount</th></tr></thead><tbody>${donationRows}</tbody></table>
+    ${pledges.length? `<h4 style="margin:16px 0 6px;">Pledges</h4>
+    <table><thead><tr><th>Date</th><th>For</th><th>Amount</th><th>Status</th></tr></thead><tbody>${pledgeRows}</tbody></table>` : ''}
+    <div style="margin-top:16px;border:2px solid #500F32;border-radius:8px;padding:10px 16px;display:inline-block;">
+      <div class="small" style="text-transform:uppercase;letter-spacing:.04em;color:#500F32;font-weight:700;">Total Given</div>
+      <div style="font-size:20px;font-weight:700;color:#1E7A4C;">${fmtMoney(totalGiven)}</div>
+    </div>
+    <div class="small muted" style="margin-top:20px;">Thank you for your generous support. No goods or services were provided in exchange for these contributions.</div>`;
+  const win = window.open('', '_blank');
+  win.document.write(letterheadHtml(body, `Giving Statement — ${d.name}`));
+  win.document.close();
+}
+function openDonorModal(id){
+  if(!requireFundraisingEdit()) return;
+  const d = id? byId(STATE.donors, id) : {id:uid('donor'), prefix:'', name:'', yiddishName:'', type:'individual', email:'', phone:'', address:'', dob:'', hebrewDob:'', notes:''};
+  showModal(`<h3>${id?'Edit':'New'} donor</h3>
+    <div class="form-cols" style="grid-template-columns:1fr 3fr;">
+      <div class="form-row"><label>Prefix <span class="small">(optional)</span></label><input id="donorPrefix" list="donorPrefixList" value="${escapeHtml(d.prefix||'')}" placeholder="e.g. Rabbi"><datalist id="donorPrefixList"><option value="Mr."><option value="Mrs."><option value="Mr. & Mrs."><option value="Dr."><option value="Rabbi"><option value="Rabbi & Mrs."><option value="Rebbetzin"></datalist></div>
+      <div class="form-row"><label>Name</label><input id="donorName" value="${escapeHtml(d.name)}" placeholder="e.g. Sarah and David Cohen, or Cohen Family Foundation"></div>
+    </div>
+    <div class="form-row">
+      <label>Yiddish name <span class="small">(optional — shown in parentheses next to the name, and used on Mailing Labels & Envelopes when "Use Yiddish names" is checked)</span></label>
+      <input id="donorYiddishName" value="${escapeHtml(d.yiddishName||'')}" dir="rtl" style="text-align:right;">
+      <button type="button" class="btn-ghost btn btn-sm btn-ai" style="margin-top:6px;" onclick="suggestDonorYiddishName()">✨ Suggest with AI</button>
+    </div>
+    <div class="form-row"><label>Type</label><select id="donorType"><option value="individual" ${d.type==='individual'?'selected':''}>Individual</option><option value="organization" ${d.type==='organization'?'selected':''}>Organization</option><option value="foundation" ${d.type==='foundation'?'selected':''}>Foundation</option></select></div>
+    <div class="form-cols">
+      <div class="form-row"><label>Email</label><input id="donorEmail" value="${escapeHtml(d.email||'')}"></div>
+      <div class="form-row"><label>Phone</label><input id="donorPhone" value="${escapeHtml(d.phone||'')}"></div>
+    </div>
+    <div class="form-row"><label>Address</label><input id="donorAddress" value="${escapeHtml(d.address||'')}"></div>
+    <div class="form-row"><label>Date of birth <span class="small">(optional — for a birthday card, an anniversary touch, etc.)</span></label><input id="donorDob" type="date" value="${d.dob||''}" onchange="updateHebrewDobPreview('donorDob','donorDobHebrew')"><div id="donorDobHebrew" class="small muted" style="margin-top:4px;">${d.dob && d.hebrewDob? `Yiddish DOB: ${containsHebrew(d.hebrewDob)?`<bdi dir="rtl">${escapeHtml(d.hebrewDob)}</bdi>`:escapeHtml(d.hebrewDob)}` : ''}</div></div>
+    <div class="form-row"><label>Notes</label><textarea id="donorNotes">${escapeHtml(d.notes||'')}</textarea></div>
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="saveDonor('${d.id}',${!id})">Save</button></div>`);
+}
+// Same idea as suggestYiddishNames for students, but simpler: a donor's "name" is often already
+// a combined household or organization name ("Sarah and David Cohen," "Cohen Family
+// Foundation") rather than one clean first+last, so this asks for a best-guess Yiddish/
+// Hebrew-script rendering of the whole name as given, not split into parts. Same caveat as the
+// student version: a starting guess to review and correct, never authoritative, and it only
+// ever fills an empty field — never overwrites something already typed by hand.
+async function suggestDonorYiddishName(){
+  const englishName = document.getElementById('donorName').value.trim();
+  if(!englishName){ toast('Enter the donor\'s name first'); return; }
+  const el = document.getElementById('donorYiddishName');
+  if(el.value.trim()){ toast('Yiddish name field already has something in it — clear it first if you want a fresh suggestion'); return; }
+  toast('Asking AI for a likely Yiddish spelling…');
+  try{
+    const data = await callClaudeAPI({ model:'claude-sonnet-5', max_tokens:200, messages:[{role:'user', content:
+`Given this English name from a Yiddish-speaking Orthodox Jewish day school's donor record, suggest the most likely traditional Yiddish/Hebrew-script spelling of the whole name, the way it would actually be written for someone from this community.
+Name: "${englishName}"
+If it's a person or family name, give your best-guess Yiddish/Hebrew-script rendering even if ambiguous — the person reviewing this will correct anything wrong. If it's an organization/foundation name with no natural Yiddish equivalent, return an empty string instead of forcing a translation. Return ONLY the Yiddish/Hebrew-script name (or an empty string), no other text, no quotes, no explanation.`}] });
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+    if(text && el && !el.value.trim()) el.value = text;
+    toast(text? '✨ Suggested — review and correct anything that looks wrong before saving' : 'AI didn\'t suggest a Yiddish name for this one — enter it manually if you\'d like');
+  }catch(e){ console.error(e); toast('AI suggestion failed: '+(e.message||'try again')); }
+}
+function saveDonor(id, isNew){
+  if(!requireFundraisingEdit()) return;
+  const name = document.getElementById('donorName').value.trim();
+  if(!name){ toast('Enter a name'); return; }
+  const dob = document.getElementById('donorDob').value;
+  const existing = byId(STATE.donors, id);
+  // Same stale-fetch guard as the Student form: only trust the live-looked-up Yiddish date if it
+  // was actually computed for the DOB currently in the field, otherwise fall back to whatever was
+  // already saved (if the DOB didn't change) or blank (if DOB was cleared or changed with no
+  // lookup having completed yet).
+  const hbEl = document.getElementById('donorDobHebrew');
+  const hebrewDob = (hbEl && hbEl.dataset.hebrew && hbEl.dataset.dobFor===dob) ? hbEl.dataset.hebrew : (dob && existing && existing.dob===dob ? existing.hebrewDob : '');
+  const data = { prefix: document.getElementById('donorPrefix').value.trim(), name, yiddishName: document.getElementById('donorYiddishName').value.trim(), type: document.getElementById('donorType').value, email: document.getElementById('donorEmail').value.trim(),
+    phone: document.getElementById('donorPhone').value.trim(), address: document.getElementById('donorAddress').value.trim(), dob, hebrewDob, notes: document.getElementById('donorNotes').value.trim() };
+  if(isNew){ STATE.donors.push({id, ...data, createdAt:new Date().toISOString()}); }
+  else { Object.assign(byId(STATE.donors,id), data); }
+  saveState(); closeModal(); renderContent(); toast('Saved');
+}
+function deleteDonor(id){
+  if(!requireFundraisingEdit()) return;
+  const inUse = STATE.pledges.some(p=>p.donorId===id) || STATE.donations.some(d=>d.donorId===id);
+  if(inUse){ toast('This donor has pledges or donations on file — delete those first if you really need to remove this donor.'); return; }
+  const d = byId(STATE.donors,id);
+  showDangerConfirm(`Delete ${escapeHtml(d?d.name:'this donor')}?`, ()=>{ STATE.donors = STATE.donors.filter(x=>x.id!==id); VIEW.openDonorId = null; saveState(); closeModal(); renderContent(); }, 'Delete donor');
+}
+function renderFundraisingPledges(editable){
+  const showCancelled = !!VIEW.showCancelledPledges;
+  const all = STATE.pledges.slice().sort((a,b)=>(b.pledgeDate||'').localeCompare(a.pledgeDate||''));
+  const pledges = showCancelled? all : all.filter(p=>p.status!=='cancelled');
+  const cancelledCount = all.filter(p=>p.status==='cancelled').length;
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <div class="muted small">A donor's commitment to give — often before the money actually arrives. Record the actual gift separately in Donations once it comes in, linked back to this pledge.</div>
+    ${editable? `<button class="btn" onclick="openPledgeModal()" ${STATE.donors.length?'':'disabled title="Add a donor first"'}>+ New pledge</button>` : ''}
+  </div>
+  ${cancelledCount? `<label style="font-weight:400;display:flex;align-items:center;gap:6px;margin-bottom:10px;"><input type="checkbox" ${showCancelled?'checked':''} onchange="VIEW.showCancelledPledges=this.checked;renderContent();"> Show ${cancelledCount} cancelled</label>` : ''}
+  ${!STATE.donors.length? `<div class="card"><div class="empty-state">Add a donor first (Donors tab).</div></div>` :
+  pledges.length? `<table><thead><tr><th>Donor</th><th>Amount</th><th>To</th><th>Date</th><th>Status</th>${editable?'<th></th>':''}</tr></thead><tbody>
+    ${pledges.map(p=>{
+      const donor = donorById(p.donorId);
+      const target = p.campaignId? fundraisingCampaignById(p.campaignId) : fundraisingFundById(p.fundId);
+      const fulfilled = pledgeFulfilledAmount(p.id);
+      const statusPill = p.status==='cancelled'? '<span class="pill pill-grey">Cancelled</span>' : fulfilled>=p.amount? '<span class="pill" style="background:#E9F3EE;color:#1E7B4D;">Fulfilled</span>' : fulfilled>0? `<span class="pill pill-amber">${fmtMoney(fulfilled)} received</span>` : '<span class="pill pill-grey">Outstanding</span>';
+      return `<tr style="${p.status==='cancelled'?'opacity:.55;':''}">
+        <td>${donor?`<span class="link" onclick="VIEW.fundraisingTab='donors';VIEW.openDonorId='${donor.id}';renderContent();">${escapeHtml(donor.name)}</span>`:'<span class="muted">Deleted donor</span>'}</td>
+        <td>${fmtMoney(p.amount)}</td>
+        <td class="small">${target?escapeHtml(target.name):'<span class="muted">(deleted)</span>'}</td>
+        <td class="small">${p.pledgeDate?fmtDate(p.pledgeDate):'<span class="muted">—</span>'}</td>
+        <td>${statusPill}</td>
+        ${editable? `<td><button class="btn-ghost btn btn-sm" onclick="openPledgeModal('${p.id}')">✎</button></td>` : ''}
+      </tr>`;
+    }).join('')}
+  </tbody></table>` : `<div class="card"><div class="empty-state">No pledges yet.</div></div>`}`;
+}
+// One dropdown covering both "give to a fund directly" and "give to a specific campaign" —
+// campaigns are grouped under their own fund's name so it's clear which fund a campaign
+// ultimately feeds, without needing two separate selectors that would have to stay in sync.
+function pledgeTargetOptionsHtml(selectedCampaignId, selectedFundId){
+  const generalOption = `<option value="general" ${(!selectedCampaignId && !selectedFundId)?'selected':''}>General (no specific fund or campaign)</option>`;
+  const fundOptions = STATE.fundraisingFunds.map(f=>{
+    const campaigns = STATE.fundraisingCampaigns.filter(c=>c.fundId===f.id && c.active!==false);
+    const fundOption = `<option value="fund:${f.id}" ${(!selectedCampaignId && selectedFundId===f.id)?'selected':''}>${escapeHtml(f.name)} (general, no specific campaign)</option>`;
+    const campaignOptions = campaigns.map(c=>`<option value="camp:${c.id}" ${selectedCampaignId===c.id?'selected':''}>${escapeHtml(f.name)} — ${escapeHtml(c.name)}</option>`).join('');
+    return fundOption + campaignOptions;
+  }).join('');
+  // A campaign can now exist with no fund assigned (see openFundraisingCampaignModal) — those
+  // need their own options here too, listed on their own since there's no fund name to group
+  // them under.
+  const fundlessCampaignOptions = STATE.fundraisingCampaigns.filter(c=>!c.fundId && c.active!==false)
+    .map(c=>`<option value="camp:${c.id}" ${selectedCampaignId===c.id?'selected':''}>${escapeHtml(c.name)} (no fund assigned)</option>`).join('');
+  return generalOption + fundOptions + fundlessCampaignOptions;
+}
+function openPledgeModal(id, presetDonorId){
+  if(!requireFundraisingEdit()) return;
+  if(!STATE.donors.length){ toast('Add a donor first'); return; }
+  const p = id? byId(STATE.pledges, id) : {id:uid('pledge'), donorId:presetDonorId||'', campaignId:'', fundId:'', amount:0, pledgeDate:todayISO(), status:'active', notes:''};
+  showModal(`<h3>${id?'Edit':'New'} pledge</h3>
+    <div class="form-row"><label>Donor</label><select id="pledgeDonor" ${presetDonorId?'disabled':''}>${STATE.donors.map(d=>`<option value="${d.id}" ${p.donorId===d.id?'selected':''}>${d.prefix?escapeHtml(d.prefix)+' ':''}${escapeHtml(d.name)}</option>`).join('')}</select></div>
+    <div class="form-row"><label>To</label><select id="pledgeTarget">${pledgeTargetOptionsHtml(p.campaignId, p.fundId)}</select></div>
+    <div class="form-cols">
+      <div class="form-row"><label>Amount</label><input type="number" min="0" step="1" id="pledgeAmount" value="${p.amount||0}"></div>
+      <div class="form-row"><label>Date pledged</label><input type="date" id="pledgeDate" value="${p.pledgeDate||todayISO()}"></div>
+    </div>
+    ${id? `<div class="form-row"><label>Status</label><select id="pledgeStatus"><option value="active" ${p.status!=='cancelled'?'selected':''}>Active</option><option value="cancelled" ${p.status==='cancelled'?'selected':''}>Cancelled</option></select></div>` : ''}
+    <div class="form-row"><label>Notes</label><textarea id="pledgeNotes">${escapeHtml(p.notes||'')}</textarea></div>
+    <div class="modal-actions">${id?`<button class="btn-ghost btn" style="color:#B3261E;" onclick="deletePledge('${id}')">Delete</button>`:''}<button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="savePledge('${p.id}',${!id}${presetDonorId?`,'${presetDonorId}'`:''})">Save</button></div>`);
+}
+function savePledge(id, isNew, presetDonorId){
+  if(!requireFundraisingEdit()) return;
+  const donorId = presetDonorId || document.getElementById('pledgeDonor').value;
+  const amount = Number(document.getElementById('pledgeAmount').value)||0;
+  if(!donorId){ toast('Pick a donor'); return; }
+  if(amount<=0){ toast('Enter an amount greater than 0'); return; }
+  const [kind, targetId] = document.getElementById('pledgeTarget').value.split(':');
+  const data = { donorId, amount, campaignId: kind==='camp'? targetId : '', fundId: kind==='fund'? targetId : '',
+    pledgeDate: document.getElementById('pledgeDate').value || todayISO(), notes: document.getElementById('pledgeNotes').value.trim() };
+  if(isNew){ STATE.pledges.push({id, ...data, status:'active', createdBy:VIEW.userId, createdAt:new Date().toISOString()}); }
+  else { const p = byId(STATE.pledges,id); Object.assign(p, data); const statusEl=document.getElementById('pledgeStatus'); if(statusEl) p.status = statusEl.value; }
+  saveState(); closeModal(); renderContent(); toast('Saved');
+}
+function deletePledge(id){
+  if(!requireFundraisingEdit()) return;
+  const linked = STATE.donations.some(d=>d.pledgeId===id);
+  if(linked){ toast('One or more donations are linked to this pledge — unlink or delete those first, or just mark this pledge Cancelled instead.'); return; }
+  showDangerConfirm('Delete this pledge?', ()=>{ STATE.pledges = STATE.pledges.filter(p=>p.id!==id); saveState(); closeModal(); renderContent(); }, 'Delete pledge');
+}
+function renderFundraisingDonations(editable){
+  const all = STATE.donations.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <div class="muted small">An actual gift that's come in — cash, check, card, or online.</div>
+    <div style="display:flex;gap:8px;">
+      ${all.length? `<button class="btn-ghost btn" onclick="openPrintDonationsLedgerModal()">🖨 Print ledger</button>` : ''}
+      ${editable? `<button class="btn" onclick="openDonationModal()" ${STATE.donors.length?'':'disabled title="Add a donor first"'}>+ Record donation</button>` : ''}
+    </div>
+  </div>
+  ${!STATE.donors.length? `<div class="card"><div class="empty-state">Add a donor first (Donors tab).</div></div>` :
+  all.length? `<table><thead><tr><th>Date</th><th>Donor</th><th>Amount</th><th>To</th><th>Method</th><th>Receipt</th>${editable?'<th></th>':''}</tr></thead><tbody>
+    ${all.map(d=>{
+      const donor = donorById(d.donorId);
+      const target = d.campaignId? fundraisingCampaignById(d.campaignId) : fundraisingFundById(d.fundId);
+      return `<tr>
+        <td class="small">${fmtDate(d.date)}</td>
+        <td>${donor?`<span class="link" onclick="VIEW.fundraisingTab='donors';VIEW.openDonorId='${donor.id}';renderContent();">${escapeHtml(donor.name)}</span>`:'<span class="muted">Deleted donor</span>'}</td>
+        <td>${fmtMoney(d.amount)}</td>
+        <td class="small">${target?escapeHtml(target.name):'<span class="muted">(deleted)</span>'}</td>
+        <td class="small">${escapeHtml(d.method||'')||'<span class="muted">—</span>'}</td>
+        <td class="small">${d.receiptSent?'✓ Sent':'<span class="muted">—</span>'}</td>
+        ${editable? `<td><button class="btn-ghost btn btn-sm" onclick="openDonationModal('${d.id}')">✎</button></td>` : ''}
+      </tr>`;
+    }).join('')}
+  </tbody></table>` : `<div class="card"><div class="empty-state">No donations recorded yet.</div></div>`}`;
+}
+function openDonationModal(id, presetDonorId){
+  if(!requireFundraisingEdit()) return;
+  if(!STATE.donors.length){ toast('Add a donor first'); return; }
+  const d = id? byId(STATE.donations, id) : {id:uid('donation'), donorId:presetDonorId||'', campaignId:'', fundId:'', pledgeId:'', amount:0, date:todayISO(), method:'Check', receiptSent:false, notes:''};
+  const donorPledges = d.donorId ? STATE.pledges.filter(p=>p.donorId===d.donorId && p.status!=='cancelled') : [];
+  showModal(`<h3>${id?'Edit':'Record'} donation</h3>
+    <div class="form-row"><label>Donor</label><select id="donationDonor" ${presetDonorId?'disabled':''} onchange="refreshDonationPledgeOptions()">${STATE.donors.map(don=>`<option value="${don.id}" ${d.donorId===don.id?'selected':''}>${don.prefix?escapeHtml(don.prefix)+' ':''}${escapeHtml(don.name)}</option>`).join('')}</select></div>
+    <div class="form-row"><label>To</label><select id="donationTarget">${pledgeTargetOptionsHtml(d.campaignId, d.fundId)}</select></div>
+    <div class="form-row"><label>Fulfilling a pledge? <span class="small">(optional)</span></label><select id="donationPledge">
+      <option value="">— not tied to a specific pledge —</option>
+      ${donorPledges.map(p=>{ const t=p.campaignId?fundraisingCampaignById(p.campaignId):fundraisingFundById(p.fundId); return `<option value="${p.id}" ${d.pledgeId===p.id?'selected':''}>${fmtMoney(p.amount)} pledged — ${t?escapeHtml(t.name):''} (${fmtDate(p.pledgeDate)})</option>`; }).join('')}
+    </select></div>
+    <div class="form-cols">
+      <div class="form-row"><label>Amount</label><input type="number" min="0" step="1" id="donationAmount" value="${d.amount||0}"></div>
+      <div class="form-row"><label>Date received</label><input type="date" id="donationDate" value="${d.date||todayISO()}"></div>
+    </div>
+    <div class="form-cols">
+      <div class="form-row"><label>Method</label><select id="donationMethod"><option ${d.method==='Check'?'selected':''}>Check</option><option ${d.method==='Cash'?'selected':''}>Cash</option><option ${d.method==='Credit card'?'selected':''}>Credit card</option><option ${d.method==='Online'?'selected':''}>Online</option><option ${d.method==='Other'?'selected':''}>Other</option></select></div>
+      <div class="form-row"><label style="font-weight:400;display:flex;gap:6px;align-items:center;margin-top:24px;"><input type="checkbox" id="donationReceipt" ${d.receiptSent?'checked':''}> Receipt/thank-you sent</label></div>
+    </div>
+    <div class="form-row"><label>Notes</label><textarea id="donationNotes">${escapeHtml(d.notes||'')}</textarea></div>
+    <div class="modal-actions">${id?`<button class="btn-ghost btn" style="color:#B3261E;" onclick="deleteDonation('${id}')">Delete</button>`:''}<button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="saveDonation('${d.id}',${!id}${presetDonorId?`,'${presetDonorId}'`:''})">Save</button></div>`);
+}
+function refreshDonationPledgeOptions(){
+  const donorId = document.getElementById('donationDonor').value;
+  const pledgeSelect = document.getElementById('donationPledge');
+  const pledges = STATE.pledges.filter(p=>p.donorId===donorId && p.status!=='cancelled');
+  pledgeSelect.innerHTML = `<option value="">— not tied to a specific pledge —</option>` +
+    pledges.map(p=>{ const t=p.campaignId?fundraisingCampaignById(p.campaignId):fundraisingFundById(p.fundId); return `<option value="${p.id}">${fmtMoney(p.amount)} pledged — ${t?escapeHtml(t.name):''} (${fmtDate(p.pledgeDate)})</option>`; }).join('');
+}
+function saveDonation(id, isNew, presetDonorId){
+  if(!requireFundraisingEdit()) return;
+  const donorId = presetDonorId || document.getElementById('donationDonor').value;
+  const amount = Number(document.getElementById('donationAmount').value)||0;
+  if(!donorId){ toast('Pick a donor'); return; }
+  if(amount<=0){ toast('Enter an amount greater than 0'); return; }
+  const [kind, targetId] = document.getElementById('donationTarget').value.split(':');
+  const data = { donorId, amount, campaignId: kind==='camp'? targetId : '', fundId: kind==='fund'? targetId : '',
+    pledgeId: document.getElementById('donationPledge').value || '', date: document.getElementById('donationDate').value || todayISO(),
+    method: document.getElementById('donationMethod').value, receiptSent: document.getElementById('donationReceipt').checked, notes: document.getElementById('donationNotes').value.trim() };
+  if(isNew){ STATE.donations.push({id, ...data, recordedBy:VIEW.userId, recordedAt:new Date().toISOString()}); }
+  else { Object.assign(byId(STATE.donations,id), data); }
+  saveState(); closeModal(); renderContent(); toast('Saved');
+}
+function deleteDonation(id){
+  if(!requireFundraisingEdit()) return;
+  showDangerConfirm('Delete this donation record?', ()=>{ STATE.donations = STATE.donations.filter(d=>d.id!==id); saveState(); closeModal(); renderContent(); }, 'Delete donation');
+}
+// A full accounting-style ledger of donations received in a date range — leave both blank for
+// everything on file. Separate from a single donor's own statement (printDonorStatement) since
+// this is meant for the school's own records/audit trail across every donor, sorted chronologically
+// like a real ledger rather than grouped by who gave.
+function openPrintDonationsLedgerModal(){
+  showModal(`<h3>Print donations ledger</h3>
+    <div class="muted small" style="margin-bottom:10px;">Leave both blank to include every donation on file.</div>
+    <div class="form-cols"><div class="form-row"><label>From</label><input type="date" id="ledgerFrom"></div><div class="form-row"><label>To</label><input type="date" id="ledgerTo"></div></div>
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="printDonationsLedger()">Print</button></div>`);
+}
+function printDonationsLedger(){
+  const from = document.getElementById('ledgerFrom').value;
+  const to = document.getElementById('ledgerTo').value;
+  let donations = STATE.donations.slice();
+  if(from) donations = donations.filter(d=>d.date>=from);
+  if(to) donations = donations.filter(d=>d.date<=to);
+  donations.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  closeModal();
+  if(!donations.length){ toast('No donations match that range'); return; }
+  const total = donations.reduce((sum,d)=>sum+(d.amount||0),0);
+  const rangeLabel = (from||to)? `${from?fmtDate(from):'the beginning'} – ${to?fmtDate(to):'today'}` : 'All dates on file';
+  const rows = donations.map(d=>{
+    const donor = donorById(d.donorId);
+    const target = d.campaignId? fundraisingCampaignById(d.campaignId) : (d.fundId? fundraisingFundById(d.fundId) : null);
+    return `<tr><td>${fmtDate(d.date)}</td><td>${donor?escapeHtml(donor.name):'(deleted donor)'}</td><td>${target?escapeHtml(target.name):'General'}</td><td>${escapeHtml(d.method||'')}</td><td>${fmtMoney(d.amount)}</td></tr>`;
+  }).join('');
+  const body = `<h2 style="margin-top:0;">Donations Ledger</h2>
+    <div class="muted small" style="margin-bottom:14px;">${escapeHtml(rangeLabel)} · ${donations.length} donation(s)</div>
+    <table><thead><tr><th>Date</th><th>Donor</th><th>For</th><th>Method</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="margin-top:16px;border:2px solid #500F32;border-radius:8px;padding:10px 16px;display:inline-block;">
+      <div class="small" style="text-transform:uppercase;letter-spacing:.04em;color:#500F32;font-weight:700;">Total</div>
+      <div style="font-size:20px;font-weight:700;color:#1E7A4C;">${fmtMoney(total)}</div>
+    </div>`;
+  const win = window.open('', '_blank');
+  win.document.write(letterheadHtml(body, 'Donations Ledger'));
+  win.document.close();
+}
+
 // Thin wrapper around canManageRegistration that also toasts on failure — matches the exact
 // behavior every ported function below already expects from its original codebase.
 function requireRegistrationEdit(){
