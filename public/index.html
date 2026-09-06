@@ -529,7 +529,7 @@ function seedState(){
     broadcastHistory:[], paymentProcessor:{ provider:'stripe', publishableKey:'', secretKey:'', webhookSecret:'', enabled:false },
     weeklyComplianceSchedule:{ weekday:'Friday', hour:14 }, families:[], familySuggestionDismissals:[],
     registrationRequirements:[], registrationStages:['Waiting', 'Applied', 'Registered'],
-    registrationLetterText:'Dear Parents,\n\nWelcome to the upcoming school year. To register your child, please:\n1. Complete the application\n2. Choose a payment plan and sign the tuition contract\n3. Submit up-to-date medical/immunization forms\n\nSincerely,\nThe School Administration',
+    registrationLetterText:'Dear {{Parents}},\n\nWelcome to the upcoming school year. To register your child, please:\n1. Complete the application\n2. Choose a payment plan and sign the tuition contract\n3. Submit up-to-date medical/immunization forms\n\nSincerely,\nThe School Administration',
     dayHours:{Mon:{start:'8:00',end:'15:30'}, Tue:{start:'8:00',end:'15:30'}, Wed:{start:'8:00',end:'15:30'}, Thu:{start:'8:00',end:'15:30'}, Fri:{start:'8:00',end:'12:00'}, Sat:{start:'8:00',end:'15:30'}},
     schoolDays:['Mon','Tue','Wed','Thu','Fri'],
     lunchBreak:{enabled:true, start:'12:00', end:'12:30'},
@@ -5474,6 +5474,20 @@ function registrationLetterHtml(){
   if(/<[a-z][\s\S]*>/i.test(raw)) return raw;
   return escapeHtml(raw).replace(/\n/g,'<br>');
 }
+// The letter is one shared template (edited in Settings), but a printed/emailed copy should
+// still greet the actual family it's going to. Rather than storing a separate personalized copy
+// per family, the template can include the merge tag {{Parents}} anywhere in its text (see
+// renderRegistrationLetterEditor's hint) — substituted here, at print/email time only, with that
+// family's real formal salutation ("Mr. and Mrs. Cohen", falling back sensibly if only one or
+// neither parent is on file). Deliberately NOT done inside registrationLetterHtml() itself,
+// since that function's output is also what seeds the Settings editor's own contenteditable —
+// substituting there would bake one specific family's name into the shared template the moment
+// anyone opened the editor to make an unrelated edit, permanently destroying the merge tag for
+// every other family. Case-insensitive so "{{parents}}" typed by hand still works.
+function personalizedRegistrationLetterHtml(student){
+  const salutation = student ? studentParentSalutationFormal(student) : 'Parents';
+  return registrationLetterHtml().replace(/\{\{\s*parents\s*\}\}/gi, escapeHtml(salutation));
+}
 function saveRegistrationLetterText(){
   if(!canManageRegistration()){ toast('You do not have permission to edit this'); return; }
   STATE.registrationLetterText = document.getElementById('regLetterEditor').innerHTML;
@@ -5525,12 +5539,13 @@ function registrationPacketBodyHtml(family){
   const ec1 = ec[0]||{}, ec2 = ec[1]||{};
   const med = first.medical||{};
   const gp = first.grandparents||{}; const gpP = gp.paternal||{}, gpM = gp.maternal||{};
-  const letterBody = registrationLetterHtml();
+  const letterBody = personalizedRegistrationLetterHtml(first);
   const medicalComment = [med.comment, ...family.students.map(s=>s.allergies)].filter(Boolean).join('; ');
-  // td/th padding is deliberately tight (3px) and h3 margins collapsed to keep the whole
-  // Family/Father/Mother/Student/Emergency/Medical/Grandparents form on ONE printed page —
-  // this is meant to be handed to a family as a single sheet, not spill onto a second page.
-  const td = 'padding:3px 6px;border:1px solid #999;';
+  // td/th padding and h3 margins are kept tight to fit the whole Family/Father/Mother/Student/
+  // Emergency/Medical/Grandparents form on ONE printed page — this is meant to be handed to a
+  // family as a single sheet, not spill onto a second page. The page itself gets its own extra
+  // side padding (below) so the content doesn't feel jammed against the edge despite that.
+  const td = 'padding:4px 8px;border:1px solid #999;';
   const studentRowsHtml = family.students.map(s=>{
     const yiddish = s.yiddishName ? ` (${escapeHtml([s.yiddishName, s.yiddishLastName].filter(Boolean).join(' '))})` : '';
     return `
@@ -5542,7 +5557,7 @@ function registrationPacketBodyHtml(family){
     </tr>`;}).join('');
   return `
     <div dir="auto" style="margin-bottom:24px;line-height:1.6;">${letterBody}</div>
-    <div style="page-break-before:always;font-size:12px;">
+    <div style="page-break-before:always;font-size:12px;padding:0 0.4in;">
       ${letterheadHeaderHtml()}
       <h2 style="text-align:center;margin:0 0 8px;">PARENT / STUDENT INFORMATION</h2>
       <h3 style="margin:0 0 3px;">Family Information</h3>
@@ -5658,7 +5673,7 @@ function registrationEmailText(family){
   const names = family.students.map(s=>s.name).join(', ');
   const mo = first.mother||{}, fa = first.father||{};
   const contractBody = tuitionContractBodyHtml(family);
-  const letterPlainText = htmlBodyToPlainParagraphs(registrationLetterHtml()).join('\n\n');
+  const letterPlainText = htmlBodyToPlainParagraphs(personalizedRegistrationLetterHtml(first)).join('\n\n');
   let text = `${letterPlainText}\n\n---\n\nPARENT / STUDENT INFORMATION\n\nStudent(s): ${names}\n`;
   if(fa.name) text += `Father: ${fa.name}${fa.cell?' · '+fa.cell:''}${fa.email?' · '+fa.email:''}\n`;
   if(mo.name) text += `Mother: ${mo.name}${mo.cell?' · '+mo.cell:''}${mo.email?' · '+mo.email:''}\n`;
@@ -7701,10 +7716,17 @@ async function backfillHebrewDobs(){
   }, 'Look them up');
 }
 function openStudentModal(id){
-  const s = id? byId(STATE.students,id) : {id:uid('stu'), year:STATE.currentYear, name:'', dob:'', diagnosis:'', classId:'', therapists:{}, mandates:{}, goals:[], parent:{}, mother:{}, father:{}, homePhone:'', address:'', respiteType:'', medicaidId:'', selfDirection:false, sdBudget:0, contactPref:{}, usesTransportation:true, transportStopId:'', transportAddressDifferent:false, transportContactName:'', transportAddress:'', transportContactPhone:'', tuitionItems:[], emergencyContacts:[{},{}], medical:{}, otcMedicationAllowed:null, grandparents:{paternal:{}, maternal:{}}};
+  // A "new student" default can be pre-filled from an AI-read completed registration form (see
+  // runRegistrationUploadExtraction) — staged here rather than written straight into
+  // STATE.students, so nothing is actually created until this modal's own Save is clicked,
+  // exactly like the ordinary blank "+ Add student" flow. Consumed and cleared immediately so a
+  // later, unrelated "+ Add student" click never accidentally reuses stale extracted data.
+  const prefill = (!id && window.__pendingStudentPrefill) ? window.__pendingStudentPrefill : null;
+  if(prefill) window.__pendingStudentPrefill = null;
+  const s = id? byId(STATE.students,id) : Object.assign({id:uid('stu'), year:STATE.currentYear, name:'', dob:'', diagnosis:'', classId:'', therapists:{}, mandates:{}, goals:[], parent:{}, mother:{}, father:{}, homePhone:'', address:'', respiteType:'', medicaidId:'', selfDirection:false, sdBudget:0, contactPref:{}, usesTransportation:true, transportStopId:'', transportAddressDifferent:false, transportContactName:'', transportAddress:'', transportContactPhone:'', tuitionItems:[], emergencyContacts:[{},{}], medical:{}, otcMedicationAllowed:null, grandparents:{paternal:{}, maternal:{}}}, prefill||{});
   const cls = classesOfYear(); const m = s.mandates||{}; const p = s.parent||{}; const mo = s.mother||{}; const fa = s.father||{}; const pref = s.contactPref||{};
   showModal(`
-    <h3>${id?'Edit':'Add'} student</h3>
+    <h3>${id?'Edit':'Add'} student${prefill?' <span class="small muted">(prefilled from uploaded form — review before saving)</span>':''}</h3>
     <div class="form-cols"><div class="form-row"><label>Full name</label><input id="mName" value="${escapeHtml(s.name)}"></div>
     <div class="form-row"><label>Date of birth</label><input id="mDob" type="date" value="${s.dob||''}" onchange="updateHebrewDobPreview()"><div id="mDobHebrew" class="small muted" style="margin-top:4px;"></div></div></div>
     ${STATE.studentFieldToggles.yiddishNames!==false ? `<div class="form-row" style="margin-bottom:6px;">
@@ -18451,6 +18473,147 @@ function requireRegistrationEdit(){
   toast("You don't have permission to edit Registration — ask an Admin to grant it in Settings → Roles & Permissions.");
   return false;
 }
+// ==================== Upload a completed registration form (AI reads it into fields) ====================
+// The reverse direction from Print & Document Center's Master Documents (which fill a BLANK form
+// FROM existing records). Here a family has already filled out — by hand, typed, scanned, or
+// photographed — a real registration form, and the goal is to get that ink back into structured
+// fields on a student record without retyping it. Same "review before anything saves" discipline
+// as every other AI-suggestion feature in this app (Yiddish names, onboarding packet splitting):
+// this never writes to a real student record directly — it only ever stages a prefill and opens
+// the normal edit modal for a person to check and correct before clicking Save.
+const REGISTRATION_EXTRACT_PROMPT = `This is a completed school registration/intake form — it may be handwritten or typed, and may mix Hebrew/Yiddish and English across one or more pages/photos provided. Extract information about the ONE student and their family found on it. Only include a value if it's actually written on the form — never guess or invent one; leave it as "" (or null for otcMedicationAllowed) if it's blank or illegible. Dates should be returned as YYYY-MM-DD if a real calendar date can be determined, otherwise "". Return ONLY a raw JSON object, no markdown fences, no other text, in exactly this shape:
+{"studentName":"","studentYiddishName":"","studentDob":"","address":"","homePhone":"","fatherName":"","fatherCell":"","fatherEmail":"","fatherWorkplace":"","motherName":"","motherCell":"","motherEmail":"","motherWorkplace":"","motherMaidenName":"","emergencyContact1":{"name":"","relationship":"","phone":""},"emergencyContact2":{"name":"","relationship":"","phone":""},"familyDoctorName":"","familyDoctorAddress":"","familyDoctorPhone":"","medicalComment":"","otcMedicationAllowed":null,"grandparentPaternalName":"","grandparentPaternalAddress":"","grandparentPaternalPhone":"","grandparentMaternalName":"","grandparentMaternalAddress":"","grandparentMaternalPhone":""}`;
+function openRegistrationUploadModal(){
+  if(!requireRegistrationEdit()) return;
+  const students = studentsOfYear().slice().sort((a,b)=>a.name.localeCompare(b.name));
+  showModal(`
+    <h3>✨ 📤 Upload a completed registration form</h3>
+    <div class="muted small" style="margin-bottom:10px;">Upload a filled-out registration form — scanned/photographed pages, a typed PDF, or a mix — handwritten or typed, Hebrew/Yiddish or English. AI reads it and prefills the matching fields for you to review before anything actually saves; nothing here writes to a record on its own.</div>
+    <div class="form-row"><label>This form is for</label>
+      <select id="regUploadMode" onchange="document.getElementById('regUploadExistingWrap').style.display=this.value==='existing'?'block':'none';">
+        <option value="new">A new student</option>
+        <option value="existing">An existing student (fill in missing info only — won't overwrite anything already on file)</option>
+      </select>
+    </div>
+    <div id="regUploadExistingWrap" style="display:none;" class="form-row">
+      <label>Which student</label>
+      <select id="regUploadStudentId">${students.length? students.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}${s.classId?' — '+escapeHtml(className(s.classId)):''}</option>`).join('') : '<option value="">— no students yet —</option>'}</select>
+    </div>
+    <div class="form-row"><label>Completed form</label>
+      <input type="file" id="regUploadFiles" multiple accept="application/pdf,image/*">
+      <div class="small muted" style="margin-top:4px;">Select several photos for a multi-page form, or one PDF covering every page (up to 6 pages read).</div>
+    </div>
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn btn-ai" id="regUploadGoBtn" onclick="runRegistrationUploadExtraction()">✨ Read with AI</button></div>
+  `);
+}
+// Converts whatever was uploaded (one or more images, and/or one or more PDFs) into a flat list
+// of image content blocks ready for a single Claude vision call — a PDF is rendered page-by-page
+// with pdf.js (same approach as autoDetectMasterDocFields above), a plain image is just read as a
+// data URL directly. Capped at 6 pages total across everything uploaded so a large scan batch
+// can't balloon the request past what a single AI call can reasonably handle.
+async function registrationUploadFilesToImageBlocks(files){
+  const blocks = [];
+  const MAX_PAGES = 6;
+  for(const file of files){
+    if(blocks.length>=MAX_PAGES) break;
+    if(file.type==='application/pdf'){
+      const buf = await file.arrayBuffer();
+      const pdfjsLib = await loadPdfJs();
+      const pdf = await pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise;
+      for(let i=1;i<=pdf.numPages && blocks.length<MAX_PAGES;i++){
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({scale:1.5});
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width; canvas.height = viewport.height;
+        await page.render({canvasContext:canvas.getContext('2d'), viewport}).promise;
+        blocks.push({type:'image', source:{type:'base64', media_type:'image/png', data:canvas.toDataURL('image/png').split(',')[1]}});
+      }
+    } else if(file.type.startsWith('image/')){
+      const dataUrl = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+      const mediaType = file.type==='image/jpg' ? 'image/jpeg' : file.type;
+      blocks.push({type:'image', source:{type:'base64', media_type:mediaType, data:dataUrl.split(',')[1]}});
+    }
+  }
+  return blocks;
+}
+// Builds the prefill object for a brand-new student — staged on window.__pendingStudentPrefill
+// and picked up by openStudentModal's own "new student" default (see there), so nothing is
+// actually created in STATE.students until the person reviewing it clicks Save, exactly like
+// the ordinary blank "+ Add student" flow already works.
+function buildStudentPrefillFromExtraction(ex){
+  return {
+    name: ex.studentName||'', yiddishName: ex.studentYiddishName||'', dob: ex.studentDob||'',
+    address: ex.address||'', homePhone: ex.homePhone||'',
+    father: {name:ex.fatherName||'', cell:ex.fatherCell||'', email:ex.fatherEmail||'', workplace:ex.fatherWorkplace||''},
+    mother: {name:ex.motherName||'', cell:ex.motherCell||'', email:ex.motherEmail||'', workplace:ex.motherWorkplace||'', maidenName:ex.motherMaidenName||''},
+    emergencyContacts: [ex.emergencyContact1||{}, ex.emergencyContact2||{}],
+    medical: {doctorName:ex.familyDoctorName||'', doctorAddress:ex.familyDoctorAddress||'', doctorPhone:ex.familyDoctorPhone||'', comment:ex.medicalComment||''},
+    otcMedicationAllowed: (typeof ex.otcMedicationAllowed==='boolean') ? ex.otcMedicationAllowed : null,
+    grandparents: {
+      paternal: {name:ex.grandparentPaternalName||'', address:ex.grandparentPaternalAddress||'', phone:ex.grandparentPaternalPhone||''},
+      maternal: {name:ex.grandparentMaternalName||'', address:ex.grandparentMaternalAddress||'', phone:ex.grandparentMaternalPhone||''},
+    },
+  };
+}
+// For an EXISTING student, only ever fills in a field that's currently blank — a real value
+// already on file is never overwritten by something read off a scanned form, since the form
+// could be older or the AI could simply misread something. Nothing here is final until the
+// person reviewing the now-prefilled edit modal actually clicks Save.
+function mergeExtractionIntoExistingStudent(s, ex){
+  const fillBlank = (o,k,v)=>{ if(v && !(o[k] && String(o[k]).trim())) o[k]=v; };
+  fillBlank(s,'dob',ex.studentDob);
+  fillBlank(s,'yiddishName',ex.studentYiddishName);
+  fillBlank(s,'address',ex.address);
+  fillBlank(s,'homePhone',ex.homePhone);
+  s.father = s.father||{}; s.mother = s.mother||{};
+  fillBlank(s.father,'name',ex.fatherName); fillBlank(s.father,'cell',ex.fatherCell); fillBlank(s.father,'email',ex.fatherEmail); fillBlank(s.father,'workplace',ex.fatherWorkplace);
+  fillBlank(s.mother,'name',ex.motherName); fillBlank(s.mother,'cell',ex.motherCell); fillBlank(s.mother,'email',ex.motherEmail); fillBlank(s.mother,'workplace',ex.motherWorkplace); fillBlank(s.mother,'maidenName',ex.motherMaidenName);
+  s.medical = s.medical||{};
+  fillBlank(s.medical,'doctorName',ex.familyDoctorName); fillBlank(s.medical,'doctorAddress',ex.familyDoctorAddress); fillBlank(s.medical,'doctorPhone',ex.familyDoctorPhone); fillBlank(s.medical,'comment',ex.medicalComment);
+  if(s.otcMedicationAllowed==null && typeof ex.otcMedicationAllowed==='boolean') s.otcMedicationAllowed = ex.otcMedicationAllowed;
+  const ec = s.emergencyContacts && s.emergencyContacts.length ? s.emergencyContacts : [{},{}];
+  const ec1 = ec[0]||{}, ec2 = ec[1]||{};
+  if(ex.emergencyContact1){ fillBlank(ec1,'name',ex.emergencyContact1.name); fillBlank(ec1,'relationship',ex.emergencyContact1.relationship); fillBlank(ec1,'phone',ex.emergencyContact1.phone); }
+  if(ex.emergencyContact2){ fillBlank(ec2,'name',ex.emergencyContact2.name); fillBlank(ec2,'relationship',ex.emergencyContact2.relationship); fillBlank(ec2,'phone',ex.emergencyContact2.phone); }
+  s.emergencyContacts = [ec1, ec2];
+  s.grandparents = s.grandparents || {paternal:{},maternal:{}};
+  s.grandparents.paternal = s.grandparents.paternal||{}; s.grandparents.maternal = s.grandparents.maternal||{};
+  fillBlank(s.grandparents.paternal,'name',ex.grandparentPaternalName); fillBlank(s.grandparents.paternal,'address',ex.grandparentPaternalAddress); fillBlank(s.grandparents.paternal,'phone',ex.grandparentPaternalPhone);
+  fillBlank(s.grandparents.maternal,'name',ex.grandparentMaternalName); fillBlank(s.grandparents.maternal,'address',ex.grandparentMaternalAddress); fillBlank(s.grandparents.maternal,'phone',ex.grandparentMaternalPhone);
+}
+async function runRegistrationUploadExtraction(){
+  const mode = document.getElementById('regUploadMode').value;
+  const existingId = mode==='existing' ? document.getElementById('regUploadStudentId').value : null;
+  if(mode==='existing' && !existingId){ toast('Pick a student first'); return; }
+  const files = [...(document.getElementById('regUploadFiles').files||[])];
+  if(!files.length){ toast('Choose at least one file to upload'); return; }
+  const goBtn = document.getElementById('regUploadGoBtn');
+  if(goBtn){ goBtn.disabled = true; goBtn.textContent = '🤖 Reading…'; }
+  toast('Reading the form with AI — this can take a few seconds…');
+  try{
+    const imageBlocks = await registrationUploadFilesToImageBlocks(files);
+    if(!imageBlocks.length){ toast('Could not read any pages from that upload'); return; }
+    const data = await callClaudeAPI({model:'claude-sonnet-5', max_tokens:2000, messages:[{role:'user', content:[...imageBlocks, {type:'text', text:REGISTRATION_EXTRACT_PROMPT}]}]});
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+    const extracted = JSON.parse(text.replace(/```json|```/g,'').trim());
+    closeModal();
+    if(mode==='existing'){
+      const s = byId(STATE.students, existingId);
+      if(!s){ toast('That student could not be found'); return; }
+      mergeExtractionIntoExistingStudent(s, extracted);
+      toast('Filled in from the uploaded form — review before saving');
+      openStudentModal(existingId);
+    } else {
+      window.__pendingStudentPrefill = buildStudentPrefillFromExtraction(extracted);
+      toast('Filled in from the uploaded form — review before saving');
+      openStudentModal(null);
+    }
+  }catch(e){
+    console.error(e);
+    toast('Could not read that form: ' + (e.message||'unknown error') + ' — try again or fill it in by hand');
+    if(goBtn){ goBtn.disabled=false; goBtn.textContent='✨ Read with AI'; }
+  }
+}
 function studentRegistrationStatus(student){
   return (student.registrationStatus && student.registrationStatus[STATE.currentYear]) || {};
 }
@@ -18889,6 +19052,7 @@ function renderRegistrationLetterEditor(){
   return `<div class="card">
     <h3>📝 Registration Letter</h3>
     <div class="muted small" style="margin-bottom:12px;">The cover letter printed as page 1 of the Registration packet. Editable — update it for a new academic year (Hebrew date, requirements, wording) any time, right here, no code change needed. Supports Hebrew/Yiddish text (right-to-left) directly, plus bold, italic, underline, alignment, and bullet lists.</div>
+    <div class="muted small" style="margin-bottom:12px;background:var(--surface-2);border-radius:8px;padding:8px 10px;">✨ Type <code>{{Parents}}</code> anywhere in the letter (e.g. "Dear {{Parents}},") and it's replaced with each family's own formal salutation — "Mr. and Mrs. Cohen," "Mrs. Cohen," etc. — when the letter is actually printed or emailed to them. It's saved here as the literal tag, not a specific family's name, so the same letter personalizes correctly for every family.</div>
     ${registrationLetterToolbarHtml()}
     <div id="regLetterEditor" contenteditable="true" dir="auto" style="min-height:320px;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-family:inherit;font-size:14px;line-height:1.6;margin-bottom:10px;">${registrationLetterHtml()}</div>
     <button class="btn" onclick="saveRegistrationLetterText()">Save</button>
@@ -18917,9 +19081,10 @@ function renderRegistration(){
   const tabs = [['students','Students'], ['report','📊 Report'], ['requirements','⚙ Requirements'], ['stages','🏷 Stages'], ['families','Families'], ['letter','Registration Letter'], ['pricing','Tuition Contract Pricing']];
   const needsFullEdit = (tab==='letter' || tab==='pricing') && !editable;
   return `<h2 style="margin-top:0;">📋 Registration — ${escapeHtml(STATE.currentYear)}</h2>
-  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;">
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
     ${tabs.map(([key,label])=>`<button class="settings-pill ${tab===key?'active':''}" onclick="VIEW.registrationTab='${key}';renderContent();">${escapeHtml(label)}</button>`).join('')}
   </div>
+  ${editable? `<div style="margin-bottom:18px;"><button class="btn-ghost btn btn-sm btn-ai" onclick="openRegistrationUploadModal()">✨ 📤 Upload a completed registration form</button></div>` : ''}
   ${!editable? `<div class="card" style="background:#F6F1E7;border:1px solid #E9D9BC;margin-bottom:12px;"><div class="small">👁️ View-only access.</div></div>` : ''}
   ${!STATE.registrationRequirements.length && tab==='students'? `<div class="card" style="margin-bottom:12px;"><div class="empty-state">No registration requirements set up yet. ${editable?'Add some in the ⚙ Requirements tab to get started.':'Ask an Admin to set some up.'}</div></div>` : ''}
   ${needsFullEdit ? `<div class="empty-state">Editing the letter and pricing requires "Manage Registration" — ask an Admin.</div>`
