@@ -12,11 +12,20 @@ exports.handler = async (event) => {
   connectLambda(event);
   const tz = process.env.SCHOOL_TIMEZONE || 'America/New_York';
   const now = nowInSchoolTz(tz);
-  if (now.weekday !== TARGET_WEEKDAY || now.hour !== TARGET_HOUR) {
-    return { statusCode: 200, body: `Not the target time (it's ${now.weekday} ${now.hour}:00 in ${tz}) — skipping.` };
-  }
 
   const store = getStore(APP_STORE);
+  // Cheap check first: read just the one small schedule key directly (not the full state, which
+  // loadFullState below fetches as one separate blob read PER top-level field) — this runs once
+  // an hour, every hour, all week, so doing the expensive full-state load before knowing whether
+  // this is even the right hour would mean ~167 wasted full-state reads a week instead of 1.
+  // Falls back to the original Friday/2:00 PM default if a school hasn't set this yet.
+  const scheduleRaw = await store.get('sk:weeklyComplianceSchedule', { type: 'json' }).catch(() => null);
+  const targetWeekday = (scheduleRaw && scheduleRaw.weekday) || TARGET_WEEKDAY;
+  const targetHour = (scheduleRaw && (scheduleRaw.hour === 0 || scheduleRaw.hour)) ? scheduleRaw.hour : TARGET_HOUR;
+  if (now.weekday !== targetWeekday || now.hour !== targetHour) {
+    return { statusCode: 200, body: `Not the target time (it's ${now.weekday} ${now.hour}:00 in ${tz}; configured for ${targetWeekday} ${targetHour}:00) — skipping.` };
+  }
+
   const reportsStore = getStore(REPORTS_STORE);
   const weekEnd = now.dateStr;
   const weekStart = dateStrDaysAgo(weekEnd, 6);
@@ -27,6 +36,8 @@ exports.handler = async (event) => {
   const already = await reportsStore.get(marker, { type: 'json' });
   if (already) return { statusCode: 200, body: `Already sent for week ending ${weekEnd}` };
 
+  // Only load the full state once we know this is genuinely the target hour — everything past
+  // this point runs at most once a week, so the cost of a full state load here is a non-issue.
   const state = await loadFullState(store);
   if (!state || state.__bootstrapAdmin) return { statusCode: 200, body: 'No real state yet' };
 

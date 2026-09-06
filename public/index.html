@@ -526,6 +526,9 @@ function seedState(){
   return {
     years:[y1,y2], currentYear:y2, schoolName:'Your School', schoolAddress:'', schoolPhone:'', schoolEIN:'',
     branches:[{ id:'branch_main', name:'Your School', assumedName:'', hasLogo:false, address:'', phone:'' }],
+    broadcastHistory:[], paymentProcessor:{ provider:'stripe', publishableKey:'', secretKey:'', webhookSecret:'', enabled:false },
+    weeklyComplianceSchedule:{ weekday:'Friday', hour:14 }, families:[], familySuggestionDismissals:[],
+    registrationLetterText:'Dear Parents,\n\nWelcome to the upcoming school year. To register your child, please:\n1. Complete the application\n2. Choose a payment plan and sign the tuition contract\n3. Submit up-to-date medical/immunization forms\n\nSincerely,\nThe School Administration',
     dayHours:{Mon:{start:'8:00',end:'15:30'}, Tue:{start:'8:00',end:'15:30'}, Wed:{start:'8:00',end:'15:30'}, Thu:{start:'8:00',end:'15:30'}, Fri:{start:'8:00',end:'12:00'}, Sat:{start:'8:00',end:'15:30'}},
     schoolDays:['Mon','Tue','Wed','Thu','Fri'],
     lunchBreak:{enabled:true, start:'12:00', end:'12:30'},
@@ -1568,6 +1571,60 @@ function migrateState(){
   // in Settings. staff/students/classes created before branches existed have no branchId at all;
   // recordBranchId() treats that as "belongs to the first branch" rather than hiding them.
   STATE.branches = STATE.branches || [{ id:'branch_main', name: STATE.schoolName||'Main Branch', assumedName:'', hasLogo:false, address: STATE.schoolAddress||'', phone: STATE.schoolPhone||'' }];
+  // Every broadcast actually sent (transportation and general) — see logBroadcastHistory. Capped
+  // at 500 entries so a long-running school's history can't grow the saved state without bound.
+  STATE.broadcastHistory = STATE.broadcastHistory || [];
+  // Shell for a future real payment processor integration — see netlify/functions/payments.js
+  // for exactly what's real vs. stubbed. enabled stays false until an Admin actually configures
+  // and tests real keys.
+  STATE.paymentProcessor = STATE.paymentProcessor || { provider:'stripe', publishableKey:'', secretKey:'', webhookSecret:'', enabled:false };
+  // Lets the weekly compliance report's send day/time be changed from Settings, no redeploy
+  // needed — see netlify/functions/weekly-compliance-report.js, which reads this same key
+  // directly (a cheap single-key read) before deciding whether to load the full state.
+  STATE.weeklyComplianceSchedule = STATE.weeklyComplianceSchedule || { weekday:'Friday', hour:14 };
+  // Registration letter text — a "living doc," editable in Settings, not hardcoded here — the
+  // wording below is only the STARTING default (transcribed from the school's original paper
+  // form), so a school can update it for a new academic year's Hebrew date, or reword it
+  // entirely, without needing a code change or asking for help every year.
+  STATE.registrationLetterText = STATE.registrationLetterText || `רעגיסטראציע שנת הלימודים תשפ"ז לפ"ק הבעל"ט
+
+לכבוד די חשובע עלטערן שיחי׳
+
+צום ערשט ווילן מיר אפגעבן א שבח והודאה להשי"ת פאר די געוואלדיגע הצלחה ביז אהער און מיר זענען ווייטער מתפלל להשי"ת ואל תטשינו ה' אלוקינו לנצח מיר זאלן קענען ווייטער ממשיך זיין מיט די עבודת הקודש.
+
+כדי אייער קינד זאל זיין רעגיסטרירט פאר די קומענדיגע שנת הלימודים פארלאנגט זיך:
+1. אויספילען דער אפליקאציע
+2. אופני תשלומען און אונטערשרייבען דער שטר הסכם
+3. אריינשיקען מעדיקעל פאורמס און זיין UP TO DATE מיט די שאטס
+
+בברכת כתיבה וחתימה טובה
+הנהלת התלמוד תורה`;
+  // Which fee types show on the printed Tuition Contract, and how — tierFeeTypeIds are the
+  // per-child checkbox options (originally hardcoded $450/$550/$650), extraFeeTypeIds are flat
+  // once-per-family lines (originally hardcoded Registration Fee/Snack). Both draw their name and
+  // dollar amount straight from STATE.tuitionFeeTypes (Billing → ⚙ Manage fee types) — the same
+  // catalog the rest of Billing already uses — rather than being fixed in code, so a school can
+  // change its own pricing without needing a code change. Empty by default until an Admin picks
+  // which fee types belong on the Contract in Settings → Tuition Contract Pricing.
+  STATE.tuitionContractConfig = STATE.tuitionContractConfig || { tierFeeTypeIds:[], extraFeeTypeIds:[] };
+  // Per-field toggles for optional parts of a student's profile that not every school tracks —
+  // starts with diagnosis, extensible the same way if another field needs the same treatment
+  // later. Defaults to true (shown) so this is invisible until an Admin actually turns one off.
+  STATE.studentFieldToggles = STATE.studentFieldToggles || { diagnosis:true };
+  // Which compliance rings show on the Dashboard AND Oversight (same underlying widget, see
+  // renderComplianceRingsRow) — a school that doesn't track, say, mandates at all can turn that
+  // ring off everywhere it would otherwise appear, rather than it staying visible just because
+  // the Reports/Schedule tab itself got hidden separately. Defaults to all shown, so this is
+  // invisible/no-op for every school until an Admin actually turns one off.
+  STATE.dashboardComplianceWidgets = STATE.dashboardComplianceWidgets || { mandate:true, report:true, contact:true };
+  // Families/Parents directory — groups siblings (matched by shared phone/email, confirmed by
+  // staff, never automatic) so they can be viewed together and optionally billed on one combined
+  // tuition statement. See familyKeyForStudent/familiesOfYear (a separate, lighter-weight, always-
+  // computed grouping used only for the Tuition Contract registration document) — this STATE.families
+  // array is the durable, explicitly-confirmed version used for ongoing billing, and intentionally
+  // doesn't replace that simpler one.
+  STATE.families = STATE.families || [];
+  STATE.familySuggestionDismissals = STATE.familySuggestionDismissals || [];
   // Live position pings from a driver's own phone while Driver View is open — see
   // startSharingLiveLocation. Keyed the same way as transportLog (routeId_direction), holding
   // just the latest ping; nothing here is a location HISTORY, only "where are they right now."
@@ -3002,6 +3059,8 @@ const PERMISSION_DEFS = [
   {key:'manageLobbyDisplay', label:'Broadcast announcements (public lobby screen and/or staff Dashboard banners)', category:'Meetings & communication'},
   {key:'manageBilling', label:'Manage Respite &amp; Self-Direction billing (rates, student setup, $ summaries)', category:'Billing'},
   {key:'printBillingSheets', label:'Print Respite/billing sheets &amp; invoices (without seeing rates or $ summaries)', category:'Billing'},
+  {key:'manageFamilies', label:'Manage Families/Parents — confirm sibling groupings, edit family labels, choose combined vs. separate tuition statements', category:'Families'},
+  {key:'viewFamilies', label:'View the Families/Parents directory, read-only (no linking/unlinking or changing statement grouping)', category:'Families'},
   {key:'manageHRIntake', label:'Manage new hire applications &amp; staff documents (School only) — includes SSN, pay info &amp; uploaded personnel files', category:'HR / Staff Intake'},
   {key:'approveOnboardingDocs', label:'Review, approve, or reject uploaded onboarding documents (Office Manager) — without this, manageHRIntake can still upload &amp; preview documents but cannot approve/reject them', category:'HR / Staff Intake'},
   {key:'viewPrivilegedStudentDocs', label:'View privileged student documents — SSN copies, sensitive legal/consent forms marked private at upload', category:'HR / Staff Intake'},
@@ -3016,7 +3075,7 @@ const PERMISSION_DEFS = [
   {key:'sendTransportBroadcasts', label:'Send broadcast messages/calls to parents about transportation (a route, a Custom Route, or everyone) — separate from route-editing or report-viewing, since this reaches real people\'s phones', category:'Transportation'},
 ];
 // Grouped once, in a fixed category order, for the redesigned matrix below.
-const PERMISSION_CATEGORY_ORDER = ['Daily editing','Deleting things','Reports & templates','Oversight & visibility','School configuration','Accounts & security','Meetings & communication','Billing','HR / Staff Intake','Transportation'];
+const PERMISSION_CATEGORY_ORDER = ['Daily editing','Deleting things','Reports & templates','Oversight & visibility','School configuration','Accounts & security','Meetings & communication','Billing','Families','HR / Staff Intake','Transportation'];
 function permissionDefsByCategory(){
   return PERMISSION_CATEGORY_ORDER.map(cat=>({ name:cat, items: PERMISSION_DEFS.filter(p=>p.category===cat) })).filter(g=>g.items.length);
 }
@@ -3635,6 +3694,7 @@ function render(){
           ${roleCanSeeTab(currentStaff().role,'calendar')? navItem('calendar','🌙','Calendar') : ''}
           ${roleCanSeeTab(currentStaff().role,'attendance')? navItem('attendance','✔️','Attendance') : ''}
           ${(currentStaff().role==='Admin' || can('manageBilling') || can('printBillingSheets'))? navItem('billing','💳','Billing') : ''}
+          ${(currentStaff().role==='Admin' || can('manageFamilies') || can('viewFamilies'))? navItem('families','👪','Families') : ''}
           ${(currentStaff().role==='Admin' || can('manageTransportSetup') || can('manageTransportRoutes') || can('viewTransportReports') || can('manageTransportNotifications') || can('sendTransportBroadcasts') || isAssignedToAnyRoute(VIEW.userId))? navItem('transportation','🚌','Transportation') : ''}
           ${roleCanSeeTab(currentStaff().role,'notes')? navItem('notes','📝','Session Notes') : ''}
           ${roleCanSeeTab(currentStaff().role,'lessonplans')? navItem('lessonplans','📚','Lesson Plans & Goals') : ''}
@@ -3748,7 +3808,7 @@ function goBackTab(){ const h = VIEW.tabHistory||[]; if(!h.length) return; VIEW.
 function tabTitle(){
   if(VIEW.tab==='hireapps' && !(currentStaff().role==='Admin' || can('manageHRIntake')) && can('signBoardApprovals')) return 'Sign as Board President';
   return {dashboard:'Dashboard', students:'Students', staff:'Staff', setup:'Classes', servicereqs:'Service Requirements', schedule:'Schedule', calendar:'Calendar', attendance:'Attendance',
-    notes:'Session Notes', lessonplans:'Lesson Plans & Goals', teammeetings:'Team Meetings', leadershipmeetings:'Admin Meetings', printcenter:'Print &amp; Document Center', reports:'Reports & Assessments', search:'Search', messages:'Messages', contacts:'Parent Contact Log', oversight:'Oversight', auditlog:'Audit Log', billing:'Billing', hireapps:'New Hire Applications', transportation:'Transportation', onboardingDocReview:'Document Review', settings:'Settings'}[VIEW.tab];
+    notes:'Session Notes', lessonplans:'Lesson Plans & Goals', teammeetings:'Team Meetings', leadershipmeetings:'Admin Meetings', printcenter:'Print &amp; Document Center', reports:'Reports & Assessments', search:'Search', messages:'Messages', contacts:'Parent Contact Log', oversight:'Oversight', auditlog:'Audit Log', billing:'Billing', families:'Families', hireapps:'New Hire Applications', transportation:'Transportation', onboardingDocReview:'Document Review', settings:'Settings'}[VIEW.tab];
 }
 // A pre-filled <input type="date"> fires its "change" event the instant whichever single
 // segment you're editing (month/day/year) becomes valid on its own — not when you're actually
@@ -3794,7 +3854,7 @@ function renderContent(){
   // a box scrolled to a totally different, wrong part of a screen scrolled well past the top.
   const savedWindowScrollY = preserveScroll ? window.scrollY : 0;
   const fns = {dashboard:renderDashboard, students:renderStudentProfileSection, staff:renderStaffProfileSection, setup:renderSetup, servicereqs:renderServiceRequirements, schedule:renderSchedule, calendar:renderSchoolCalendar, attendance:renderAttendance,
-    notes:renderNotes, lessonplans:renderLessonPlans, teammeetings:renderTeamMeetings, leadershipmeetings:renderLeadershipMeetings, printcenter:renderPrintCenter, reports:renderReports, search:renderSearch, messages:renderMessages, contacts:renderContacts, oversight:renderOversight, auditlog:renderAuditLog, billing:renderBilling, hireapps:renderHireApplications, transportation:renderTransportation, onboardingDocReview:renderOnboardingDocReview, settings:renderSettings};
+    notes:renderNotes, lessonplans:renderLessonPlans, teammeetings:renderTeamMeetings, leadershipmeetings:renderLeadershipMeetings, printcenter:renderPrintCenter, reports:renderReports, search:renderSearch, messages:renderMessages, contacts:renderContacts, oversight:renderOversight, auditlog:renderAuditLog, billing:renderBilling, families:renderFamilies, hireapps:renderHireApplications, transportation:renderTransportation, onboardingDocReview:renderOnboardingDocReview, settings:renderSettings};
   try{
     c.innerHTML = fns[VIEW.tab]();
     afterRenderHooks[VIEW.tab] && afterRenderHooks[VIEW.tab]();
@@ -4645,7 +4705,7 @@ function filterStudentsDirectory(inputEl){
 function studentsCardGridHtml(visible){
   return `<div class="grid" id="studentDirGrid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));">
     ${visible.map(s=>`<div class="card student-card" tabindex="0" role="button" aria-label="Open ${escapeHtml(s.name)}'s profile" style="cursor:pointer;" onclick="VIEW.profileStudent='${s.id}';render();" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
-      <h3 style="display:flex;align-items:center;gap:10px;"><span class="avatar-badge" style="background:${avatarColorFor(s.name)}">${escapeHtml(initials(s.name))}</span>${escapeHtml(s.name)}</h3><div class="muted small">${[s.classId?escapeHtml(className(s.classId)):null, (s.diagnosis||'').trim()||null].filter(Boolean).join(' · ') || '<span style="font-style:italic;">No class assigned yet</span>'}</div>
+      <h3 style="display:flex;align-items:center;gap:10px;"><span class="avatar-badge" style="background:${avatarColorFor(s.name)}">${escapeHtml(initials(s.name))}</span>${escapeHtml(s.name)}</h3><div class="muted small">${[s.classId?escapeHtml(className(s.classId)):null, STATE.studentFieldToggles.diagnosis!==false ? ((s.diagnosis||'').trim()||null) : null].filter(Boolean).join(' · ') || '<span style="font-style:italic;">No class assigned yet</span>'}</div>
       <div class="student-card-actions" style="display:flex;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid #F0EEE8;flex-wrap:wrap;">
         <button class="btn-ghost btn btn-sm" onclick="event.stopPropagation();printEmergencyProfile('${s.id}')" title="Print emergency profile" aria-label="Print emergency profile for ${escapeHtml(s.name)}" style="border-color:#A6350F;color:#A6350F;">🚨 Emergency</button>
         <button class="btn-ghost btn btn-sm" onclick="event.stopPropagation();printAdmissionCards(['${s.id}'])" title="Print admission card" aria-label="Print admission card for ${escapeHtml(s.name)}">🎫 Card</button>
@@ -5300,13 +5360,18 @@ function printTuitionContract(anyStudentIdInFamily){
   const first = family.students[0];
   const address = [first.address, first.city, first.state, first.zip].filter(Boolean);
   const familyDisplayName = studentParentSalutationFormal(first);
+  const cfg = STATE.tuitionContractConfig;
+  const tierTypes = cfg.tierFeeTypeIds.map(id=>byId(STATE.tuitionFeeTypes,id)).filter(Boolean);
+  const extraTypes = cfg.extraFeeTypeIds.map(id=>byId(STATE.tuitionFeeTypes,id)).filter(Boolean);
+  if(!tierTypes.length && !extraTypes.length){
+    toast('Set up your tuition pricing first — Settings → Tuition Contract Pricing');
+    return;
+  }
   const rowsHtml = family.students.map(s=>`
     <tr>
       <td style="padding:8px;border:1px solid #999;">${escapeHtml(s.name)}</td>
       <td style="padding:8px;border:1px solid #999;text-align:center;">${escapeHtml(className(s.classId))}</td>
-      <td style="padding:8px;border:1px solid #999;text-align:center;">☐ $450</td>
-      <td style="padding:8px;border:1px solid #999;text-align:center;">☐ $550</td>
-      <td style="padding:8px;border:1px solid #999;text-align:center;">☐ $650</td>
+      ${tierTypes.map(ft=>`<td style="padding:8px;border:1px solid #999;text-align:center;">☐ ${fmtMoney(ft.defaultAmount)}</td>`).join('')}
     </tr>`).join('');
   const body = `
     <div dir="rtl" style="text-align:center;font-weight:700;font-size:15pt;margin-bottom:2px;">שטר הסכם לשכר לימוד לשנת הלימודים תשפ"ז לפ"ק</div>
@@ -5314,24 +5379,21 @@ function printTuitionContract(anyStudentIdInFamily){
     <div style="margin-bottom:16px;">
       <div><strong>Name:</strong> ${escapeHtml(familyDisplayName)}</div>
       <div><strong>Address:</strong> ${escapeHtml(address.join(', '))}</div>
+      ${family.students.length===1? `<div style="margin-top:4px;">${studentIdPrintTag(first)}</div>` : ''}
     </div>
-    <div dir="rtl" style="margin-bottom:8px;font-weight:600;">ביטע צייכנט אן וועלכע פרייזן איר זענט גרייט זיך אינטערצונעמען:</div>
+    ${tierTypes.length ? `<div dir="rtl" style="margin-bottom:8px;font-weight:600;">ביטע צייכנט אן וועלכע פרייזן איר זענט גרייט זיך אינטערצונעמען:</div>
     <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
       <thead><tr style="background:#F1E3EC;">
         <th style="padding:8px;border:1px solid #999;">Student name</th>
         <th style="padding:8px;border:1px solid #999;">Class</th>
-        <th style="padding:8px;border:1px solid #999;" dir="rtl">בני תורה</th>
-        <th style="padding:8px;border:1px solid #999;" dir="rtl">בעלי בתים</th>
-        <th style="padding:8px;border:1px solid #999;" dir="rtl">בעלי יכולת</th>
+        ${tierTypes.map(ft=>`<th style="padding:8px;border:1px solid #999;" dir="auto">${escapeHtml(ft.name)}</th>`).join('')}
       </tr></thead>
       <tbody>${rowsHtml}</tbody>
-    </table>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
-      <tr><td style="padding:8px;border:1px solid #999;">Yearly Transportation</td><td style="padding:8px;border:1px solid #999;width:120px;">$__________</td></tr>
-      <tr><td style="padding:8px;border:1px solid #999;">Yearly Snack (Class ט)</td><td style="padding:8px;border:1px solid #999;">$150.00</td></tr>
-      <tr><td style="padding:8px;border:1px solid #999;">Registration Fee</td><td style="padding:8px;border:1px solid #999;">$150.00</td></tr>
+    </table>` : ''}
+    ${extraTypes.length ? `<table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
+      ${extraTypes.map(ft=>`<tr><td style="padding:8px;border:1px solid #999;">${escapeHtml(ft.name)}</td><td style="padding:8px;border:1px solid #999;width:120px;">${ft.defaultAmount?fmtMoney(ft.defaultAmount):'$__________'}</td></tr>`).join('')}
       <tr style="font-weight:700;background:#F7F2E8;"><td style="padding:8px;border:1px solid #999;">Total for the year</td><td style="padding:8px;border:1px solid #999;">$__________</td></tr>
-    </table>
+    </table>` : ''}
     <div style="font-weight:700;margin-bottom:8px;" dir="rtl">אופני התשלום:</div>
     <div style="margin-bottom:6px;">☐ Ten Monthly Payments, post-dated Sep. 1 ${escapeHtml(String(STATE.years.find(y=>y===STATE.currentYear)||'').split('-')[0]||'')} thru June ${escapeHtml(String(STATE.currentYear).split('-')[1]||'')}</div>
     <div style="margin-bottom:6px;">☐ Charge my Credit Card every month: ☐ 10 Months</div>
@@ -5347,12 +5409,115 @@ function printTuitionContract(anyStudentIdInFamily){
   win.document.write(letterheadHtml(body, `Tuition Contract — ${familyDisplayName}`, familyDisplayName));
   win.document.close();
 }
+function saveStudentFieldToggles(){
+  if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
+  STATE.studentFieldToggles = { diagnosis: document.getElementById('sftDiagnosis').checked };
+  saveState(); renderContent(); toast('Saved');
+}
+function saveTuitionContractPricing(){
+  if(!(currentStaff().role==='Admin' || can('manageBilling'))){ toast('You do not have permission to edit this'); return; }
+  STATE.tuitionContractConfig = {
+    tierFeeTypeIds: [...document.querySelectorAll('.tcpTier:checked')].map(el=>el.value),
+    extraFeeTypeIds: [...document.querySelectorAll('.tcpExtra:checked')].map(el=>el.value),
+  };
+  saveState(); toast('Tuition Contract pricing saved');
+}
+function saveRegistrationLetterText(){
+  if(!(currentStaff().role==='Admin' || can('editSchoolInfo'))){ toast('You do not have permission to edit this'); return; }
+  STATE.registrationLetterText = document.getElementById('regLetterText').value;
+  saveState(); toast('Registration letter saved');
+}
+function saveDashboardComplianceWidgets(){
+  if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
+  STATE.dashboardComplianceWidgets = {
+    mandate: document.getElementById('dcwMandate').checked,
+    report: document.getElementById('dcwReport').checked,
+    contact: document.getElementById('dcwContact').checked,
+  };
+  saveState(); renderContent(); toast('Saved — updated on the Dashboard, Oversight, and the printed report');
+}
+// Registration packet — page 1 (the editable letter from Settings, personalized with the current
+// year) + page 2 (a Family/Student Information form, one row per child rather than the original
+// paper form's single fixed row). Pre-fills whatever Ledger already has on file (names, address,
+// phone, allergies); anything the app doesn't track at all (emergency contacts, family doctor,
+// grandparents) prints as blank fields for the family to fill in by hand, same as the original
+// paper form — this is a print-and-return document, not a data-entry replacement.
+function printRegistrationLetter(anyStudentIdInFamily){
+  const anchor = byId(STATE.students, anyStudentIdInFamily);
+  if(!anchor){ toast('Could not find that student'); return; }
+  const family = familiesOfYear().find(f=>f.key===familyKeyForStudent(anchor));
+  if(!family){ toast('Could not find that family'); return; }
+  const first = family.students[0];
+  const familyDisplayName = studentParentSalutationFormal(first);
+  const mo = first.mother||{}, fa = first.father||{};
+  const letterBody = escapeHtml(STATE.registrationLetterText).replace(/\n/g,'<br>');
+  const studentRowsHtml = family.students.map(s=>`
+    <tr>
+      <td style="padding:6px;border:1px solid #999;">${escapeHtml(s.name)}</td>
+      <td style="padding:6px;border:1px solid #999;">${escapeHtml(className(s.classId))}</td>
+      <td style="padding:6px;border:1px solid #999;">${s.dob?fmtDate(s.dob):''}</td>
+    </tr>`).join('');
+  const body = `
+    <div dir="auto" style="margin-bottom:24px;line-height:1.6;">${letterBody}</div>
+    <div style="page-break-before:always;">
+      <h2 style="text-align:center;margin-top:0;">PARENT / STUDENT INFORMATION</h2>
+      <h3 style="margin-bottom:6px;">Family Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>Name:</strong> ${escapeHtml(familyDisplayName)}</td>
+            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Address:</strong> ${escapeHtml(first.address||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Home phone:</strong> ${escapeHtml(first.homePhone||'')}</td></tr>
+      </table>
+      <h3 style="margin-bottom:6px;">Father's Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>Name:</strong> ${escapeHtml(fa.name||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Cell phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Email:</strong> ${escapeHtml(fa.email||'')}</td></tr>
+      </table>
+      <h3 style="margin-bottom:6px;">Mother's Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>Name:</strong> ${escapeHtml(mo.name||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Cell phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}</td>
+            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Email:</strong> ${escapeHtml(mo.email||'')}</td></tr>
+      </table>
+      <h3 style="margin-bottom:6px;">Student(s)</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+        <thead><tr style="background:#F1E3EC;"><th style="padding:6px;border:1px solid #999;">Legal name</th><th style="padding:6px;border:1px solid #999;">Class</th><th style="padding:6px;border:1px solid #999;">DOB</th></tr></thead>
+        <tbody>${studentRowsHtml}</tbody>
+      </table>
+      <h3 style="margin-bottom:6px;">Emergency Contact Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+        <thead><tr style="background:#F1E3EC;"><th style="padding:6px;border:1px solid #999;">Name</th><th style="padding:6px;border:1px solid #999;">Relationship</th><th style="padding:6px;border:1px solid #999;">Phone</th></tr></thead>
+        <tbody><tr><td style="padding:14px;border:1px solid #999;">&nbsp;</td><td style="padding:14px;border:1px solid #999;">&nbsp;</td><td style="padding:14px;border:1px solid #999;">&nbsp;</td></tr>
+        <tr><td style="padding:14px;border:1px solid #999;">&nbsp;</td><td style="padding:14px;border:1px solid #999;">&nbsp;</td><td style="padding:14px;border:1px solid #999;">&nbsp;</td></tr></tbody>
+      </table>
+      <h3 style="margin-bottom:6px;">Medical Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+        <tr><td style="padding:6px;border:1px solid #999;width:50%;"><strong>Family doctor:</strong> &nbsp;</td><td style="padding:6px;border:1px solid #999;width:50%;"><strong>Phone:</strong> &nbsp;</td></tr>
+        <tr><td colspan="2" style="padding:6px;border:1px solid #999;"><strong>Medical comment / allergies:</strong> ${escapeHtml(family.students.map(s=>s.allergies).filter(Boolean).join('; '))||'&nbsp;'}</td></tr>
+      </table>
+      <h3 style="margin-bottom:6px;">Grandparents' Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
+        <tr><td style="padding:14px;border:1px solid #999;" colspan="2">&nbsp;</td></tr>
+        <tr><td style="padding:14px;border:1px solid #999;" colspan="2">&nbsp;</td></tr>
+      </table>
+      <h3 style="margin-bottom:6px;">Medical Consent</h3>
+      <div style="margin-bottom:8px;">I hereby authorize ${escapeHtml(STATE.schoolName)} as our agent to consent to any emergency diagnostic procedure, medical care, or hospital as deemed necessary for the student(s) listed above.</div>
+      <div style="margin-bottom:16px;">Child may be given OTC pain relief medication: ☐ Yes &nbsp; ☐ No</div>
+      <div style="display:flex;gap:40px;">
+        <div style="flex:1;">Parent Signature: _________________________</div>
+        <div style="flex:1;">Date: _________________________</div>
+      </div>
+    </div>`;
+  const win = window.open('', '_blank');
+  win.document.write(letterheadHtml(body, `Registration — ${familyDisplayName}`, familyDisplayName));
+  win.document.close();
+}
 function printGoals(studentId){
   const student = byId(STATE.students, studentId);
   const goals = clinicalGoals(student);
   if(!goals.length){ toast('No clinical goals to print'); return; }
   const body = `<h2>IEP Goals — ${escapeHtml(student.name)}</h2>
-    <div class="muted small" style="margin-bottom:12px;">${className(student.classId)} · Generated ${fmtDate(todayISO())}</div>
+    <div class="muted small" style="margin-bottom:12px;">${className(student.classId)} · Generated ${fmtDate(todayISO())} ${studentIdPrintTag(student)}</div>
     ${goals.map(g=>`<div style="margin:12px 0;padding-bottom:10px;border-bottom:1px solid #ddd;">
       <strong>${escapeHtml(g.discipline)}</strong> — <span>${escapeHtml(g.status)}</span>
       <div style="margin-top:4px;">${escapeHtml(g.text)}</div>
@@ -7375,7 +7540,7 @@ function openStudentModal(id){
         <div class="small muted">The last name is shared for the whole family and used with the student's, mother's, and father's first names above. Used on Mailing Labels & Envelopes when "Use Yiddish names" is checked there — falls back to the regular English name for anyone left blank here. "✨ Suggest with AI" fills in its best guess for whichever of these fields are still empty, based on the English names already typed above — it's a starting guess, not authoritative (the same English name often has more than one real Yiddish spelling), so double-check and correct anything it gets wrong before saving.</div>
       </div>
     </div>
-    <div class="form-row"><label>Diagnosis</label>
+    ${STATE.studentFieldToggles.diagnosis!==false ? `<div class="form-row"><label>Diagnosis</label>
       <select id="mDiagSelect" onchange="document.getElementById('mDiagOtherWrap').style.display=this.value==='Other'?'block':'none';">
         <option value="" ${!s.diagnosis?'selected':''}>— none —</option>
         <option value="Down syndrome" ${s.diagnosis==='Down syndrome'?'selected':''}>Down syndrome</option>
@@ -7384,11 +7549,12 @@ function openStudentModal(id){
       <div id="mDiagOtherWrap" style="margin-top:6px;display:${s.diagnosis && s.diagnosis!=='Down syndrome'?'block':'none'};">
         <input id="mDiagOther" placeholder="Type diagnosis" value="${escapeHtml(s.diagnosis && s.diagnosis!=='Down syndrome'?s.diagnosis:'')}">
       </div>
-    </div>
+    </div>` : ''}
     <div class="form-row"><label>Allergies <span class="small muted">(shown prominently on the emergency profile print)</span></label><input id="mAllergies" placeholder="e.g. Peanuts, penicillin — or leave blank for none known" value="${escapeHtml(s.allergies||'')}"></div>
+    <div class="form-row"><label>Student ID <span class="small muted">(your own school-assigned number — stays the same across years, unlike the internal record; used to print on documents and to match siblings for Families)</span></label><input id="mStudentIdNumber" value="${escapeHtml(s.studentIdNumber||'')}"></div>
     ${STATE.branches.length>1 ? `<div class="form-row"><label>Branch</label><select id="mBranch">${STATE.branches.map(b=>`<option value="${b.id}" ${(s.branchId||STATE.branches[0].id)===b.id?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}</select></div>` : ''}
     <div class="form-row"><label>Class</label><select id="mClass"><option value="">— none —</option>${cls.map(c=>`<option value="${c.id}" ${c.id===s.classId?'selected':''}>${c.name}${STATE.branches.length>1?` (${escapeHtml((byId(STATE.branches,recordBranchId(c))||{}).name||'')})`:''}</option>`).join('')}</select></div>
-    <div class="form-row">
+    ${STATE.dashboardComplianceWidgets.mandate!==false ? `<div class="form-row">
       <label>Scheduling limits <span class="small">(blank = use the school-wide setting from Settings)</span></label>
       <label style="font-weight:400;display:flex;align-items:center;gap:6px;margin-bottom:6px;"><input type="checkbox" id="mSchedRuleOverride" ${s.schedulingRules?'checked':''} onchange="document.getElementById('mSchedRuleWrap').style.display=this.checked?'flex':'none';"> Give this student different scheduling limits</label>
       <div id="mSchedRuleWrap" style="display:${s.schedulingRules?'flex':'none'};gap:18px;align-items:flex-end;flex-wrap:wrap;">
@@ -7415,7 +7581,7 @@ function openStudentModal(id){
         </div>`;
       }).join('')}
       <div class="small" style="margin-top:6px;">Group therapy duties (Oral Motor Group, Collaboration, etc.) are set up per class now, under Classes → Manage group activities — not tracked as an individual mandate here.</div>
-    </div>
+    </div>` : ''}
     <div class="form-row"><label>Family contact info <span class="small">(optional)</span></label>
       <div class="form-cols" style="margin-bottom:8px;align-items:start;">
         <div>
@@ -7533,20 +7699,23 @@ function saveStudent(id){
   { const hbEl = document.getElementById('mDobHebrew'); s.hebrewDob = (hbEl && hbEl.dataset.hebrew && hbEl.dataset.dobFor===s.dob) ? hbEl.dataset.hebrew : (s.dob? s.hebrewDob : ''); }
   s.yiddishName = document.getElementById('mYiddishName').value.trim();
   s.yiddishLastName = document.getElementById('mYiddishLastName').value.trim();
-  { const diagSel = document.getElementById('mDiagSelect').value; s.diagnosis = diagSel==='Other' ? document.getElementById('mDiagOther').value.trim() : diagSel; }
+  if(document.getElementById('mDiagSelect')){ const diagSel = document.getElementById('mDiagSelect').value; s.diagnosis = diagSel==='Other' ? document.getElementById('mDiagOther').value.trim() : diagSel; }
   s.allergies = document.getElementById('mAllergies').value.trim();
+  s.studentIdNumber = document.getElementById('mStudentIdNumber').value.trim();
   const branchEl = document.getElementById('mBranch');
   s.branchId = branchEl ? branchEl.value : (s.branchId || STATE.branches[0].id);
   s.classId=document.getElementById('mClass').value;
-  s.therapists = {OT:document.getElementById('mOT').value, PT:document.getElementById('mPT').value, SLP:document.getElementById('mSLP').value};
-  s.mandates = {};
-  ['OT','PT','SLP'].forEach(d=>{
-    if(document.getElementById('mandOv_'+d).checked){
-      s.mandates[d] = {
-        oneOnOne: {timesPerWeek: parseInt(document.getElementById('mand_'+d+'_1_x').value)||0, minutes: parseInt(document.getElementById('mand_'+d+'_1_m').value)||30},
-      };
-    }
-  });
+  if(document.getElementById('mOT')){
+    s.therapists = {OT:document.getElementById('mOT').value, PT:document.getElementById('mPT').value, SLP:document.getElementById('mSLP').value};
+    s.mandates = {};
+    ['OT','PT','SLP'].forEach(d=>{
+      if(document.getElementById('mandOv_'+d).checked){
+        s.mandates[d] = {
+          oneOnOne: {timesPerWeek: parseInt(document.getElementById('mand_'+d+'_1_x').value)||0, minutes: parseInt(document.getElementById('mand_'+d+'_1_m').value)||30},
+        };
+      }
+    });
+  }
   s.goals = s.goals||[];
   s.parent = { name: document.getElementById('mParentName').value.trim(), phone: document.getElementById('mParentPhone').value.trim(), email: document.getElementById('mParentEmail').value.trim(), canText: parseCanText(document.getElementById('mParentCanText').value) };
   s.mother = { name: document.getElementById('mMotherName').value.trim(), yiddishName: document.getElementById('mMotherYiddishName').value.trim(), cell: document.getElementById('mMotherCell').value.trim(), email: document.getElementById('mMotherEmail').value.trim(), canText: parseCanText(document.getElementById('mMotherCanText').value) };
@@ -7569,10 +7738,12 @@ function saveStudent(id){
     s.transportContactPhone = s.transportAddressDifferent ? document.getElementById('mTransportAddrPhone').value.trim() : '';
     s.transportLookupCode = document.getElementById('mTransportLookupCode').value.trim();
   }
-  s.schedulingRules = document.getElementById('mSchedRuleOverride').checked ? {
-    maxSessionsPerDay: parseInt(document.getElementById('mMaxSessPerDay').value)||0,
-    minGapMinutes: parseInt(document.getElementById('mMinGap').value)||0,
-  } : null;
+  if(document.getElementById('mSchedRuleOverride')){
+    s.schedulingRules = document.getElementById('mSchedRuleOverride').checked ? {
+      maxSessionsPerDay: parseInt(document.getElementById('mMaxSessPerDay').value)||0,
+      minGapMinutes: parseInt(document.getElementById('mMinGap').value)||0,
+    } : null;
+  }
   saveState(); closeModal(); render(); toast('Student saved');
 }
 function deleteStudent(id){
@@ -13006,7 +13177,10 @@ function renderPrintCenter(){
     ${familiesOfYear().length ? `<div style="max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;">
       ${familiesOfYear().map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);">
         <div><strong>${escapeHtml(f.lastName||'(no last name on file)')}</strong> <span class="muted small">— ${f.students.length} ${f.students.length===1?'child':'children'} (${f.students.map(s=>escapeHtml(s.name)).join(', ')})</span></div>
-        <button class="btn-ghost btn btn-sm" onclick="printTuitionContract('${f.students[0].id}')">🖨 Tuition Contract</button>
+        <div style="display:flex;gap:6px;">
+          <button class="btn-ghost btn btn-sm" onclick="printRegistrationLetter('${f.students[0].id}')">🖨 Registration</button>
+          <button class="btn-ghost btn btn-sm" onclick="printTuitionContract('${f.students[0].id}')">🖨 Tuition Contract</button>
+        </div>
       </div>`).join('')}
     </div>` : `<div class="muted small">No students in ${escapeHtml(STATE.currentYear)} yet.</div>`}
   </div>
@@ -13630,7 +13804,7 @@ async function printEmergencyProfile(studentId){
       <div style="text-transform:uppercase;font-size:11px;letter-spacing:.04em;color:#A6350F;font-weight:700;margin-bottom:4px;">Allergies</div>
       <div style="font-size:16px;font-weight:700;color:#A6350F;">${s.allergies? escapeHtml(s.allergies) : 'None known on file'}</div>
     </div>
-    ${s.diagnosis? `<div class="f"><div class="l">Diagnosis</div><div class="v">${escapeHtml(s.diagnosis)}</div></div>` : ''}
+    ${s.diagnosis && STATE.studentFieldToggles.diagnosis!==false ? `<div class="f"><div class="l">Diagnosis</div><div class="v">${escapeHtml(s.diagnosis)}</div></div>` : ''}
     ${guardianRow('Mother', s.mother)}
     ${guardianRow('Father', s.father)}
     ${guardianRow('Other guardian/contact', s.parent)}
@@ -13673,7 +13847,7 @@ function generateFullStudentRecordPrint(studentId){
   const student = byId(STATE.students, studentId);
   const lockedDiscipline = myLockedDiscipline();
   let sections = `<h1 style="margin-bottom:0;">${escapeHtml(student.name)}</h1>
-    <div class="muted small" style="margin-bottom:4px;">${escapeHtml(className(student.classId))} · DOB ${student.dob||'—'} · ${escapeHtml(student.diagnosis||'')}</div>
+    <div class="muted small" style="margin-bottom:4px;">${escapeHtml(className(student.classId))} · DOB ${student.dob||'—'} · ${escapeHtml(student.diagnosis||'')} ${studentIdPrintTag(student)}</div>
     ${(student.mother && (student.mother.name||student.mother.cell||student.mother.email))? `<div class="muted small">Mother: ${escapeHtml(student.mother.name||'—')}${student.mother.cell?' · '+escapeHtml(student.mother.cell):''}${student.mother.email?' · '+escapeHtml(student.mother.email):''}</div>`:''}
     ${(student.father && (student.father.name||student.father.cell||student.father.email))? `<div class="muted small">Father: ${escapeHtml(student.father.name||'—')}${student.father.cell?' · '+escapeHtml(student.father.cell):''}${student.father.email?' · '+escapeHtml(student.father.email):''}</div>`:''}
     ${(student.homePhone||student.address)? `<div class="muted small">${student.homePhone?'Home phone: '+escapeHtml(student.homePhone):''}${student.homePhone&&student.address?' · ':''}${student.address?escapeHtml(student.address):''}</div>`:''}
@@ -13723,7 +13897,7 @@ function generateNotesPrint(studentId){
   notes.sort((a,b)=>a.date.localeCompare(b.date));
   if(!notes.length){ toast('No notes match those filters'); return; }
   const body = `<h2>Session Notes — ${escapeHtml(studentName(studentId))}</h2>
-    <div class="muted small" style="margin-bottom:12px;">${from||to? `${from?fmtDate(from):'Start'} – ${to?fmtDate(to):'Present'}`:'All dates on file'}</div>
+    <div class="muted small" style="margin-bottom:12px;">${from||to? `${from?fmtDate(from):'Start'} – ${to?fmtDate(to):'Present'}`:'All dates on file'} ${studentIdPrintTagById(studentId)}</div>
     ${notes.map(n=>`<div style="margin:14px 0;padding-bottom:10px;border-bottom:1px solid #ddd;">
       <strong>${fmtDate(n.date)}</strong> — ${escapeHtml(staffName(n.staffId))} · <span>${escapeHtml(n.discipline)}</span>
       <div style="margin-top:4px;">${escapeHtml(n.raw||'')}</div>
@@ -13758,7 +13932,7 @@ function generateReportsPrint(studentId){
     const tpl = byId(STATE.reportTemplates, r.templateId);
     return `<div style="page-break-after:always;">
       <h2>${escapeHtml(tpl?tpl.name:'Report')} — ${escapeHtml(studentName(studentId))}</h2>
-      <div class="muted small" style="margin-bottom:10px;">Author: ${escapeHtml(staffName(r.authorId))} · Status: ${statusLabel(r.status)} · Updated ${fmtDate(r.updatedAt.slice(0,10))}</div>
+      <div class="muted small" style="margin-bottom:10px;">Author: ${escapeHtml(staffName(r.authorId))} · Status: ${statusLabel(r.status)} · Updated ${fmtDate(r.updatedAt.slice(0,10))} ${studentIdPrintTagById(studentId)}</div>
       ${tpl? tpl.fields.map(f=>`<div style="margin-bottom:10px;"><strong>${escapeHtml(f.label)}</strong><div>${reportFieldValueHtml(f,r)}</div></div>`).join('') : ''}
       ${r.authorSignature? `<div class="muted small" style="margin-top:10px;">Signed: ${escapeHtml(r.authorSignature.name)}, ${fmtDateTime(r.authorSignature.signedAt)}</div>`:''}
     </div>`;
@@ -13783,7 +13957,7 @@ function generateContactLogPrint(studentId){
   if(to) logs = logs.filter(l=>l.date<=to);
   logs.sort((a,b)=>a.date.localeCompare(b.date));
   const body = `<h2>Parent Contact Log — ${escapeHtml(studentName(studentId))}</h2>
-    <div class="muted small" style="margin-bottom:12px;">${from||to? `${from?fmtDate(from):'Start'} – ${to?fmtDate(to):'Present'}`:'All dates on file'}</div>
+    <div class="muted small" style="margin-bottom:12px;">${from||to? `${from?fmtDate(from):'Start'} – ${to?fmtDate(to):'Present'}`:'All dates on file'} ${studentIdPrintTagById(studentId)}</div>
     ${logs.length? logs.map(l=>{ const who = l.contactRelation==='Other' ? (l.contactName||'Other') : (l.contactRelation||'');
       return `<div style="margin:14px 0;padding-bottom:10px;border-bottom:1px solid #ddd;">
       <strong>${fmtDate(l.date)}</strong> — ${escapeHtml(staffName(l.staffId))} · ${escapeHtml(l.method)}${who?` · spoke with ${escapeHtml(who)}`:''}
@@ -14691,10 +14865,14 @@ function renderComplianceRingsRow(rows){
   const con = sum('contactMet','contactTotal');
   const pct = x=> x.total? Math.round(x.met/x.total*100) : 100;
   const mandPct=pct(mand), repPct=pct(rep), conPct=pct(con);
+  const vis = STATE.dashboardComplianceWidgets || {mandate:true, report:true, contact:true};
+  const rings = [];
+  if(vis.mandate!==false) rings.push(progressRing(mandPct, 'Mandate compliance', complianceRingColor(mandPct), mand.total?`${mand.met}/${mand.total} met`:'No mandates set'));
+  if(vis.report!==false) rings.push(progressRing(repPct, 'Report compliance', complianceRingColor(repPct), rep.total?`${rep.met}/${rep.total} on track`:'No report rules set'));
+  if(vis.contact!==false) rings.push(progressRing(conPct, 'Parent contact', complianceRingColor(conPct), con.total?`${con.met}/${con.total} met`:'No contact rules set'));
+  if(!rings.length) return '';
   return `<div style="display:flex;gap:28px;flex-wrap:wrap;justify-content:space-around;">
-    ${progressRing(mandPct, 'Mandate compliance', complianceRingColor(mandPct), mand.total?`${mand.met}/${mand.total} met`:'No mandates set')}
-    ${progressRing(repPct, 'Report compliance', complianceRingColor(repPct), rep.total?`${rep.met}/${rep.total} on track`:'No report rules set')}
-    ${progressRing(conPct, 'Parent contact', complianceRingColor(conPct), con.total?`${con.met}/${con.total} met`:'No contact rules set')}
+    ${rings.join('')}
   </div>`;
 }
 // Shared by both the on-screen table and the print view, so "what you're looking at" and "what
@@ -14736,12 +14914,15 @@ function printOversightCompliance(){
   const sum = (metKey,totalKey)=>rows.reduce((acc,r)=>({met:acc.met+r[metKey], total:acc.total+r[totalKey]}),{met:0,total:0});
   const mand = sum('metCount','totalMandates'), rep = sum('reportFreqMet','reportFreqTotal'), con = sum('contactMet','contactTotal');
   const pct = x=> x.total? Math.round(x.met/x.total*100) : 100;
+  const vis = STATE.dashboardComplianceWidgets || {mandate:true, report:true, contact:true};
+  const measureRows = [];
+  if(vis.mandate!==false) measureRows.push(`<tr><td>Mandate compliance</td><td>${pct(mand)}%</td><td>${mand.total?`${mand.met}/${mand.total} met`:'No mandates set'}</td></tr>`);
+  if(vis.report!==false) measureRows.push(`<tr><td>Report compliance</td><td>${pct(rep)}%</td><td>${rep.total?`${rep.met}/${rep.total} on track`:'No report rules set'}</td></tr>`);
+  if(vis.contact!==false) measureRows.push(`<tr><td>Parent contact compliance</td><td>${pct(con)}%</td><td>${con.total?`${con.met}/${con.total} met`:'No contact rules set'}</td></tr>`);
   const body = `<div class="lh-title">Compliance at a Glance</div>
     <div class="lh-meta">School year ${STATE.currentYear} · Generated ${fmtDate(todayISO())}</div>
     <table><thead><tr><th>Measure</th><th>Compliance</th><th>Detail</th></tr></thead><tbody>
-      <tr><td>Mandate compliance</td><td>${pct(mand)}%</td><td>${mand.total?`${mand.met}/${mand.total} met`:'No mandates set'}</td></tr>
-      <tr><td>Report compliance</td><td>${pct(rep)}%</td><td>${rep.total?`${rep.met}/${rep.total} on track`:'No report rules set'}</td></tr>
-      <tr><td>Parent contact compliance</td><td>${pct(con)}%</td><td>${con.total?`${con.met}/${con.total} met`:'No contact rules set'}</td></tr>
+      ${measureRows.join('') || '<tr><td colspan="3" class="muted">No compliance measures are turned on for this school.</td></tr>'}
     </tbody></table>`;
   printOversightSection('Compliance at a Glance', body);
 }
@@ -16436,6 +16617,7 @@ function renderSettings(){
   const canEmail = can('manageEmailSettings');
   const canAbsencePolicy = isAdmin || can('manageAbsencePolicy');
   const canLobby = isAdmin || can('manageLobbyDisplay');
+  const canPaymentProcessor = isAdmin || can('manageBilling');
 
   const sections = [];
   if(BACKEND_MODE) sections.push({key:'account', label:'Account & Team'});
@@ -16444,6 +16626,12 @@ function renderSettings(){
   if(canManageRoles) sections.push({key:'roles', label:'Roles & Permissions'});
   if(canAbsencePolicy) sections.push({key:'absence', label:'Staff Absence Allowance'});
   if(canLobby) sections.push({key:'lobby', label:'Lobby Display'});
+  if(canPaymentProcessor) sections.push({key:'paymentprocessor', label:'Payment Processor'});
+  if(isAdmin) sections.push({key:'compliancesched', label:'Compliance Report Schedule'});
+  if(isAdmin) sections.push({key:'studentfields', label:'Student Profile Fields'});
+  if(isAdmin || can('manageBilling')) sections.push({key:'tuitioncontractpricing', label:'Tuition Contract Pricing'});
+  if(isAdmin || canSchoolInfo) sections.push({key:'registrationletter', label:'Registration Letter'});
+  if(isAdmin) sections.push({key:'dashboardwidgets', label:'Dashboard & Reports Widgets'});
   if(isAdmin && BACKEND_MODE) sections.push({key:'testdata', label:'Test Mode Data'});
   if(isAdmin) sections.push({key:'branches', label:'Branches'});
   if(isAdmin) sections.push({key:'danger', label:'Danger Zone'});
@@ -16638,6 +16826,82 @@ function renderSettings(){
       </div>
       <div class="small muted" style="margin-bottom:12px;">Worth knowing: Test Mode applies each person's own real role and permissions (see the banner shown there), so anyone using it only ever sees what they're already allowed to see in the real system — the same visibility rules apply either way. That said, treat anything shown during a training session as real, even though it's labeled Test Mode; it's a live copy of actual student and staff information, not made-up data.</div>
       <button class="btn" id="copyTestDataBtn" onclick="copyRealDataToTestMode()">📋 Copy real data into Test Mode now</button>
+    </div>`,
+
+    paymentprocessor: `<div class="card">
+      <h3>💳 Payment Processor</h3>
+      <div class="muted small" style="margin-bottom:12px;">Connects a real online payment processor for tuition "Pay now" and online giving. This is a shell for real keys — the actual charge/checkout flow still needs building against your processor's own API once you have real credentials; see the note at the bottom.</div>
+      <div class="form-cols">
+        <div class="form-row"><label>Provider</label>
+          <select id="ppProvider">
+            <option value="stripe" ${STATE.paymentProcessor.provider==='stripe'?'selected':''}>Stripe</option>
+          </select>
+        </div>
+        <div class="form-row"><label style="font-weight:400;display:flex;align-items:center;gap:6px;margin-top:24px;"><input type="checkbox" id="ppEnabled" ${STATE.paymentProcessor.enabled?'checked':''}> Enabled (show "Pay now" / "Online giving" to families)</label></div>
+      </div>
+      <div class="form-row"><label>Publishable key</label><input class="tinput" id="ppPublishableKey" value="${escapeHtml(STATE.paymentProcessor.publishableKey||'')}"></div>
+      <div class="form-row"><label>Secret key</label><input class="tinput" id="ppSecretKey" type="password" value="${escapeHtml(STATE.paymentProcessor.secretKey||'')}"></div>
+      <div class="form-row"><label>Webhook secret <span class="small muted">(for automatic payment confirmation — not required to save keys)</span></label><input class="tinput" id="ppWebhookSecret" type="password" value="${escapeHtml(STATE.paymentProcessor.webhookSecret||'')}"></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="savePaymentProcessorConfig()">Save</button>
+        <button class="btn-ghost btn" onclick="testPaymentProcessorConnection()">Test connection</button>
+      </div>
+      <div class="small muted" style="margin-top:10px;">Test connection only confirms your keys reached the server — it doesn't yet verify them against ${escapeHtml(STATE.paymentProcessor.provider||'the processor')}'s own API. Real checkout processing is intentionally not built yet; this screen and the backend are ready for whenever that follow-up work happens.</div>
+    </div>`,
+
+    compliancesched: `<div class="card">
+      <h3>📅 Weekly Compliance Report Schedule</h3>
+      <div class="muted small" style="margin-bottom:12px;">When the automatic weekly compliance report emails go out to staff. Changing this takes effect the next time that hour comes around — no redeploy needed.</div>
+      <div class="form-cols">
+        <div class="form-row"><label>Day of week</label>
+          <select id="wcrWeekday">
+            ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d=>`<option value="${d}" ${(STATE.weeklyComplianceSchedule.weekday===d)?'selected':''}>${d}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-row"><label>Hour <span class="small muted">(school's local time, 24-hour)</span></label>
+          <select id="wcrHour">
+            ${Array.from({length:24},(_,h)=>h).map(h=>`<option value="${h}" ${STATE.weeklyComplianceSchedule.hour===h?'selected':''}>${h}:00</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <button class="btn" onclick="saveWeeklyComplianceSchedule()">Save</button>
+    </div>`,
+
+    dashboardwidgets: `<div class="card">
+      <h3>📊 Dashboard &amp; Reports Widgets</h3>
+      <div class="muted small" style="margin-bottom:12px;">Turns a compliance measure off everywhere it appears — the Dashboard, the Oversight tab, and the printed "Compliance at a Glance" report — not just one screen at a time. Useful if this school doesn't track one of these at all (for example, no formal mandate hours). Applies for every staff member, including Admin.</div>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="dcwMandate" ${STATE.dashboardComplianceWidgets.mandate!==false?'checked':''}> Mandate compliance <span class="small muted">(also hides the OT/PT/SLP scheduling limits &amp; service minutes section on every student's profile)</span></label>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="dcwReport" ${STATE.dashboardComplianceWidgets.report!==false?'checked':''}> Report compliance</label>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;"><input type="checkbox" id="dcwContact" ${STATE.dashboardComplianceWidgets.contact!==false?'checked':''}> Parent contact compliance</label>
+      <button class="btn" onclick="saveDashboardComplianceWidgets()">Save</button>
+    </div>`,
+
+    studentfields: `<div class="card">
+      <h3>🧾 Student Profile Fields</h3>
+      <div class="muted small" style="margin-bottom:12px;">Turn off fields this school doesn't track — removes the field from every student's profile (so no one can enter new data in it) and hides any existing value from the profile header and the printed Full Record. Nothing already saved gets deleted; it's just hidden, and comes right back if you turn it back on.</div>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="sftDiagnosis" ${STATE.studentFieldToggles.diagnosis!==false?'checked':''}> Diagnosis</label>
+      <button class="btn" onclick="saveStudentFieldToggles()">Save</button>
+    </div>`,
+
+    tuitioncontractpricing: `<div class="card">
+      <h3>💲 Tuition Contract Pricing</h3>
+      <div class="muted small" style="margin-bottom:12px;">Which fee types show on the printed Tuition Contract, and how. Names and dollar amounts come from your existing fee type catalog — Billing → "⚙ Manage fee types" — so update the price there and it updates here automatically. If your list below is empty, set up fee types there first.</div>
+      <h4 style="margin-bottom:4px;">Tuition tier options <span class="small muted" style="font-weight:400;">(shown as a checkbox per child, e.g. different tuition levels)</span></h4>
+      <div style="margin-bottom:14px;">
+        ${STATE.tuitionFeeTypes.length? STATE.tuitionFeeTypes.map(ft=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:4px;"><input type="checkbox" class="tcpTier" value="${ft.id}" ${STATE.tuitionContractConfig.tierFeeTypeIds.includes(ft.id)?'checked':''}> ${escapeHtml(ft.name)} — ${fmtMoney(ft.defaultAmount)}</label>`).join('') : '<div class="muted small">No fee types set up yet.</div>'}
+      </div>
+      <h4 style="margin-bottom:4px;">Additional fees <span class="small muted" style="font-weight:400;">(one flat line per family, e.g. Registration Fee)</span></h4>
+      <div style="margin-bottom:14px;">
+        ${STATE.tuitionFeeTypes.length? STATE.tuitionFeeTypes.map(ft=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:4px;"><input type="checkbox" class="tcpExtra" value="${ft.id}" ${STATE.tuitionContractConfig.extraFeeTypeIds.includes(ft.id)?'checked':''}> ${escapeHtml(ft.name)} — ${fmtMoney(ft.defaultAmount)}</label>`).join('') : '<div class="muted small">No fee types set up yet.</div>'}
+      </div>
+      <button class="btn" onclick="saveTuitionContractPricing()">Save</button>
+    </div>`,
+
+    registrationletter: `<div class="card">
+      <h3>📝 Registration Letter</h3>
+      <div class="muted small" style="margin-bottom:12px;">The cover letter printed as page 1 of the Registration packet. This is your own editable text — update it for a new academic year (Hebrew date, requirements, wording) any time, right here, with no code change needed. Supports Hebrew/Yiddish text directly.</div>
+      <div class="form-row"><textarea id="regLetterText" dir="auto" rows="16" style="font-family:inherit;font-size:14px;line-height:1.5;">${escapeHtml(STATE.registrationLetterText)}</textarea></div>
+      <button class="btn" onclick="saveRegistrationLetterText()">Save</button>
     </div>`,
 
     branches: `<div class="card">
@@ -16948,6 +17212,287 @@ function deleteBranch(id){
     delete window.__branchLogoCache[id];
     saveState(); renderContent(); toast('Branch deleted');
   }, 'Delete branch');
+}
+
+// ==================== Student ID on printed documents ====================
+function studentIdPrintTag(student){
+  if(!student || !student.studentIdNumber) return '';
+  return `<span style="color:#9A90A3;">ID ${escapeHtml(student.studentIdNumber)}</span>`;
+}
+function studentIdPrintTagById(studentId){ return studentIdPrintTag(byId(STATE.students, studentId)); }
+
+// ==================== Broadcast history ====================
+function logBroadcastHistory(rec){
+  STATE.broadcastHistory.unshift({
+    id: uid('bc'), at: new Date().toISOString(), sentBy: currentStaff() ? currentStaff().name : '',
+    kind: rec.kind, label: rec.label, message: rec.message,
+    viaSms: !!rec.viaSms, viaVoice: !!rec.viaVoice,
+    smsSent: rec.smsSent||0, smsFailed: rec.smsFailed||0, smsSkipped: rec.smsSkipped||0,
+    callSent: rec.callSent||0, callFailed: rec.callFailed||0,
+  });
+  if(STATE.broadcastHistory.length>500) STATE.broadcastHistory.length = 500;
+  saveState();
+}
+function renderBroadcastHistoryModal(){
+  const rows = STATE.broadcastHistory||[];
+  showModal(`<h3>📜 Broadcast history</h3>
+    <div class="small muted" style="margin-bottom:10px;">Every broadcast actually sent — transportation and general — most recent first.</div>
+    <div style="max-height:60vh;overflow:auto;">
+    ${rows.length? rows.map(r=>{
+      const methodBits = [];
+      if(r.viaSms) methodBits.push(`📩 ${r.smsSent} sent${r.smsFailed?`, ${r.smsFailed} failed`:''}${r.smsSkipped?`, ${r.smsSkipped} skipped`:''}`);
+      if(r.viaVoice) methodBits.push(`📞 ${r.callSent} placed${r.callFailed?`, ${r.callFailed} failed`:''}`);
+      return `<div style="border-bottom:1px solid var(--line);padding:10px 2px;">
+        <div style="display:flex;justify-content:space-between;gap:10px;">
+          <strong>${r.kind==='transport'?'🚌':'📢'} ${escapeHtml(r.label||'')}</strong>
+          <span class="small muted" style="white-space:nowrap;">${fmtDateTime(r.at)}</span>
+        </div>
+        <div class="small" style="margin:4px 0;color:var(--ink);">${escapeHtml(r.message||'')}</div>
+        <div class="small muted">${methodBits.join(' · ')||'Nothing sent'}${r.sentBy?` · Sent by ${escapeHtml(r.sentBy)}`:''}</div>
+      </div>`;
+    }).join('') : '<div class="muted small" style="padding:12px 0;">No broadcasts sent yet.</div>'}
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+
+// ==================== Payment processor scaffolding (not live — see payments.js) ====================
+async function savePaymentProcessorConfig(){
+  if(!(currentStaff().role==='Admin' || can('manageBilling'))){ toast('You do not have permission to change payment processor settings'); return; }
+  STATE.paymentProcessor = {
+    provider: document.getElementById('ppProvider').value,
+    publishableKey: document.getElementById('ppPublishableKey').value.trim(),
+    secretKey: document.getElementById('ppSecretKey').value.trim(),
+    webhookSecret: document.getElementById('ppWebhookSecret').value.trim(),
+    enabled: document.getElementById('ppEnabled').checked,
+  };
+  const ok = await saveState();
+  render();
+  if(ok) toast('Payment processor settings saved');
+}
+async function testPaymentProcessorConnection(){
+  if(!STATE.paymentProcessor.publishableKey && !STATE.paymentProcessor.secretKey){ toast('Enter your processor keys first'); return; }
+  try{
+    const res = await backendFetch('/payments', {method:'POST', body: JSON.stringify({action:'test-connection'})});
+    toast((res.body && (res.body.message || res.body.error)) || (res.ok? '✓ Keys are saved and reachable by the backend' : 'Could not verify — check your keys'));
+  }catch(e){ toast('Could not reach the backend function'); }
+}
+function openPayNowModal(studentId){
+  const s = byId(STATE.students, studentId); if(!s) return;
+  const summary = studentTuitionSummary(studentId);
+  const canManage = can('manageBilling');
+  const cfg = STATE.paymentProcessor;
+  if(!cfg.enabled || !cfg.publishableKey){
+    showModal(`<h3>💳 Pay now — ${escapeHtml(s.name)}</h3>
+      <div class="small" style="margin-bottom:10px;">Balance due: <strong>${fmtMoney(summary.balance)}</strong></div>
+      <div class="muted small">Online payment isn't connected yet.${canManage? ' Connect a processor in Settings → Payment Processor to turn this on.' : ' Ask the school office about paying by check, cash, or bank transfer for now.'}</div>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+    return;
+  }
+  showModal(`<h3>💳 Pay now — ${escapeHtml(s.name)}</h3>
+    <div class="small" style="margin-bottom:10px;">Balance due: <strong>${fmtMoney(summary.balance)}</strong></div>
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="startTuitionCheckout('${studentId}')">Continue to payment</button></div>`);
+}
+async function startTuitionCheckout(studentId){
+  const summary = studentTuitionSummary(studentId);
+  const res = await backendFetch('/payments', {method:'POST', body: JSON.stringify({action:'create-checkout-session', studentId, amountCents: Math.round(summary.balance*100)})});
+  if(res.ok && res.body && res.body.url){ window.location.href = res.body.url; return; }
+  toast((res.body && res.body.error) || 'Online payment isn\'t live yet.');
+}
+function openOnlineDonationLinkModal(){
+  showModal(`<h3>🔗 Online donation link</h3>
+    <div class="small" style="margin-bottom:8px;">Your payment processor is connected and enabled, but the real hosted donation page/checkout still needs its follow-up pass built against ${escapeHtml(STATE.paymentProcessor.provider||'your processor')}'s actual API before a real link exists here.</div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+
+// ==================== Weekly compliance report — configurable schedule ====================
+function saveWeeklyComplianceSchedule(){
+  if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
+  STATE.weeklyComplianceSchedule = {
+    weekday: document.getElementById('wcrWeekday').value,
+    hour: parseInt(document.getElementById('wcrHour').value, 10),
+  };
+  saveState(); toast('Saved — takes effect next time that hour comes around');
+}
+
+// ==================== Families / Parents directory ====================
+// Collects every parent email on a student's record — mirrors studentFamilyIdentifiers' email
+// collection below, kept separate since callers here only want emails, not phones too.
+function studentParentEmails(student){
+  const out = [];
+  [['Mother',student.mother],['Father',student.father],['Other guardian',student.parent]].forEach(([label,p])=>{
+    if(p && p.email) out.push({label, name:p.name||label, email:p.email});
+  });
+  return out;
+}
+function normalizePhoneForMatch(p){ return String(p||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); }
+function normalizeEmailForMatch(e){ return String(e||'').trim().toLowerCase(); }
+function studentFamilyIdentifiers(student){
+  const phones = new Set(), emails = new Set();
+  [student.mother, student.father, student.parent].forEach(p=>{
+    if(!p) return;
+    const phone = p.cell || p.phone;
+    if(phone){ const n = normalizePhoneForMatch(phone); if(n.length>=7) phones.add(n); }
+    if(p.email){ const n = normalizeEmailForMatch(p.email); if(n) emails.add(n); }
+  });
+  if(student.homePhone){ const n = normalizePhoneForMatch(student.homePhone); if(n.length>=7) phones.add(n); }
+  return {phones, emails};
+}
+function groupKey(idsArr){ return idsArr.slice().sort().join(','); }
+// Union-find over this year's students (that have a Student ID on file) connecting anyone
+// sharing a normalized phone/email, filtered to exclude groups that already exactly match an
+// existing linked family or a previously-dismissed suggestion. A student with no Student ID set
+// can't participate — Families matching keys on that number specifically because it's the one
+// thing that stays stable for the same real kid across a year rollover, unlike the internal
+// record id.
+function suggestFamilyGroups(){
+  const students = studentsOfYear().filter(s=>s.studentIdNumber);
+  const parent = {};
+  const find = x=>{ while(parent[x] && parent[x]!==x) x = parent[x]; return x; };
+  const union = (a,b)=>{ const ra=find(a), rb=find(b); if(ra!==rb) parent[ra]=rb; };
+  students.forEach(s=>{ parent[s.studentIdNumber] = s.studentIdNumber; });
+  const byPhone = {}, byEmail = {};
+  students.forEach(s=>{
+    const {phones, emails} = studentFamilyIdentifiers(s);
+    phones.forEach(p=>{ (byPhone[p]=byPhone[p]||[]).push(s.studentIdNumber); });
+    emails.forEach(e=>{ (byEmail[e]=byEmail[e]||[]).push(s.studentIdNumber); });
+  });
+  [byPhone, byEmail].forEach(map=>{
+    Object.values(map).forEach(ids=>{ for(let i=1;i<ids.length;i++) union(ids[0], ids[i]); });
+  });
+  const groups = {};
+  students.forEach(s=>{ const r = find(s.studentIdNumber); (groups[r]=groups[r]||[]).push(s.studentIdNumber); });
+  const existingSets = STATE.families.map(f=>new Set(f.studentIdNumbers));
+  const sameSet = (idsArr, set) => idsArr.length===set.size && idsArr.every(id=>set.has(id));
+  const dismissed = new Set(STATE.familySuggestionDismissals);
+  return Object.values(groups)
+    .filter(idsArr=>idsArr.length>1)
+    .filter(idsArr=>!existingSets.some(set=>sameSet(idsArr,set)))
+    .filter(idsArr=>!dismissed.has(groupKey(idsArr)))
+    .map(idsArr=>({ studentIdNumbers: idsArr, students: idsArr.map(idn=>students.find(s=>s.studentIdNumber===idn)).filter(Boolean) }));
+}
+function familyForStudent(studentId){
+  const s = byId(STATE.students, studentId);
+  if(!s || !s.studentIdNumber) return null;
+  return STATE.families.find(f=>f.studentIdNumbers.includes(s.studentIdNumber)) || null;
+}
+function familyMembersForYear(family, year){
+  year = year || STATE.currentYear;
+  return STATE.students.filter(s=>s.year===year && family.studentIdNumbers.includes(s.studentIdNumber));
+}
+function canManageFamilies(){ return currentStaff().role==='Admin' || can('manageFamilies'); }
+function canViewFamilies(){ return canManageFamilies() || can('viewFamilies'); }
+function confirmFamilySuggestion(studentIdNumbers){
+  if(!canManageFamilies()){ toast('You do not have permission to manage families'); return; }
+  // Merges into an existing family if any student in the suggestion already belongs to one,
+  // rather than always pushing a new record — a new sibling matching an already-linked family
+  // would otherwise create a SECOND family record containing the same original members, leaving
+  // them listed in two families at once.
+  const overlapping = STATE.families.filter(f=>f.studentIdNumbers.some(id=>studentIdNumbers.includes(id)));
+  if(overlapping.length){
+    const primary = overlapping[0];
+    const merged = new Set(primary.studentIdNumbers);
+    studentIdNumbers.forEach(id=>merged.add(id));
+    overlapping.slice(1).forEach(f=>f.studentIdNumbers.forEach(id=>merged.add(id)));
+    primary.studentIdNumbers = [...merged];
+    if(overlapping.length>1) STATE.families = STATE.families.filter(f=>f===primary || !overlapping.includes(f));
+  } else {
+    STATE.families.push({id: uid('fam'), label:'', studentIdNumbers: studentIdNumbers.slice(), combinedStatement:false});
+  }
+  saveState(); renderContent();
+  toast('Family linked');
+}
+function dismissFamilySuggestion(studentIdNumbers){
+  if(!canManageFamilies()){ toast('You do not have permission to manage families'); return; }
+  // Dismissing the whole matched GROUP (not a pairwise dismissal) matters: matching is
+  // transitive, so a third student sharing a contact value with both dismissed students could
+  // otherwise silently re-connect them despite the dismissal.
+  const key = groupKey(studentIdNumbers);
+  if(!STATE.familySuggestionDismissals.includes(key)) STATE.familySuggestionDismissals.push(key);
+  saveState(); renderContent();
+  toast('Won\'t suggest that match again');
+}
+function renameFamily(familyId, label){
+  const f = STATE.families.find(x=>x.id===familyId); if(!f) return;
+  f.label = label; saveState();
+}
+function setFamilyCombinedStatement(familyId, combined){
+  if(!canManageFamilies()){ toast('You do not have permission to manage families'); return; }
+  const f = STATE.families.find(x=>x.id===familyId); if(!f) return;
+  f.combinedStatement = combined; saveState(); renderContent();
+}
+function removeFamily(familyId){
+  if(!canManageFamilies()){ toast('You do not have permission to manage families'); return; }
+  showConfirm('Unlink this family? Each student goes back to having their own separate statement — nothing about their tuition items or payments is affected.', ()=>{
+    STATE.families = STATE.families.filter(f=>f.id!==familyId);
+    saveState(); renderContent();
+  }, 'Unlink');
+}
+function openManualFamilyModal(){
+  if(!canManageFamilies()){ toast('You do not have permission to manage families'); return; }
+  const students = studentsOfYear().slice().sort((a,b)=>a.name.localeCompare(b.name)).filter(s=>s.studentIdNumber);
+  showModal(`<h3>Link students as one family</h3>
+    <div class="small muted" style="margin-bottom:10px;">For siblings the automatic phone/email matching didn't catch (e.g. divorced parents with different numbers on each record). Only students with a Student ID on file can be linked — add one on their profile first if it's missing.</div>
+    <div style="max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px 10px;">
+      ${students.map(s=>`<label style="display:flex;align-items:center;gap:6px;padding:2px 0;"><input type="checkbox" class="manualFamilyCb" value="${escapeHtml(s.studentIdNumber)}"> ${escapeHtml(s.name)} <span class="muted small">(${escapeHtml(className(s.classId))})</span></label>`).join('') || '<div class="muted small">No students with a Student ID on file yet.</div>'}
+    </div>
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="saveManualFamily()">Link selected as a family</button></div>`);
+}
+function saveManualFamily(){
+  const ids = [...document.querySelectorAll('.manualFamilyCb:checked')].map(el=>el.value);
+  if(ids.length<2){ toast('Pick at least 2 students'); return; }
+  STATE.families.push({id: uid('fam'), label:'', studentIdNumbers: ids, combinedStatement:false});
+  closeModal(); saveState(); renderContent();
+  toast('Family linked');
+}
+function renderFamilies(){
+  if(!canViewFamilies()) return `<div class="empty-state">You don't have permission to view Families/Parents. Ask an Admin to grant "View the Families/Parents directory" in Settings → Roles & Permissions.</div>`;
+  const editable = canManageFamilies();
+  const suggestions = suggestFamilyGroups();
+  const families = STATE.families.slice().sort((a,b)=>(a.label||'').localeCompare(b.label||''));
+  return `<h2 style="margin-top:0;">👪 Families</h2>
+  <div class="muted small" style="margin-bottom:14px;">Groups siblings together so you can see all of a family's kids and parent info in one place, and choose whether they get one combined tuition statement or separate ones. Matching is suggested automatically from shared phone numbers/emails across student records (using each student's Student ID field, not the internal record) — nothing links automatically until it's confirmed below.</div>
+  ${suggestions.length? `<div class="card" style="margin-bottom:14px;background:#FFF8E8;border:1px solid #F0D98A;">
+    <h3 style="margin-top:0;">🔎 Suggested matches (${suggestions.length})</h3>
+    ${suggestions.map(sug=>`<div style="border-bottom:1px solid #F0D98A;padding:8px 0;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <div>${sug.students.map(s=>`<span class="pill pill-grey" style="margin-right:4px;">${escapeHtml(s.name)} <span class="small muted">(${escapeHtml(className(s.classId))})</span></span>`).join('')}</div>
+      ${editable? `<div style="display:flex;gap:6px;">
+        <button class="btn btn-sm" onclick='confirmFamilySuggestion(${JSON.stringify(sug.studentIdNumbers)})'>✓ Same family</button>
+        <button class="btn-ghost btn btn-sm" onclick='dismissFamilySuggestion(${JSON.stringify(sug.studentIdNumbers)})'>✕ Not the same family</button>
+      </div>` : ''}
+    </div>`).join('')}
+  </div>` : ''}
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+      <h3 style="margin:0;">Linked families (${families.length})</h3>
+      ${editable? `<button class="btn-ghost btn btn-sm" onclick="openManualFamilyModal()">+ Link students manually</button>` : ''}
+    </div>
+    ${families.length? families.map(f=>{
+      const members = familyMembersForYear(f, STATE.currentYear);
+      const contactMap = new Map();
+      members.forEach(m=>{
+        [['Mother',m.mother],['Father',m.father],['Other guardian',m.parent]].forEach(([label,p])=>{
+          if(!p || !(p.name||p.cell||p.phone||p.email)) return;
+          const key = normalizeEmailForMatch(p.email) || normalizePhoneForMatch(p.cell||p.phone) || (label+p.name);
+          if(!contactMap.has(key)) contactMap.set(key, {label, name:p.name, phone:p.cell||p.phone, email:p.email});
+        });
+      });
+      const contacts = [...contactMap.values()];
+      return `<div style="border-bottom:1px solid var(--line);padding:12px 0;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            ${editable? `<input class="tinput" style="max-width:220px;" value="${escapeHtml(f.label||'')}" placeholder="Family name (optional)" onchange="renameFamily('${f.id}', this.value.trim())">` : `<strong>${escapeHtml(f.label || 'Unnamed family')}</strong>`}
+            ${members.map(m=>`<span class="pill pill-grey">${escapeHtml(m.name)} <span class="small muted">(${escapeHtml(className(m.classId))})</span></span>`).join('')}
+          </div>
+          ${editable? `<button class="btn-ghost btn btn-sm" onclick="removeFamily('${f.id}')">Unlink</button>` : ''}
+        </div>
+        <div class="small muted" style="margin-top:6px;">${contacts.map(c=>`${escapeHtml(c.label)}: ${escapeHtml(c.name||'—')}${c.phone?' · '+escapeHtml(c.phone):''}${c.email?' · '+escapeHtml(c.email):''}`).join(' &nbsp;|&nbsp; ') || 'No parent contact info on file yet.'}</div>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;">
+          <input type="checkbox" ${f.combinedStatement?'checked':''} ${editable?'':'disabled'} onchange="setFamilyCombinedStatement('${f.id}', this.checked)">
+          <span class="small">Bill this family on <strong>one combined tuition statement</strong> (itemized by child) instead of separate statements per child</span>
+        </label>
+      </div>`;
+    }).join('') : '<div class="empty-state">No families linked yet — confirm a suggested match above, or link students manually.</div>'}
+  </div>`;
 }
 async function saveSchoolSettings(){
   STATE.schoolName = document.getElementById('setSchool').value.trim() || STATE.schoolName;
@@ -17599,6 +18144,8 @@ function renderTuitionStudentDetail(studentId, canManage){
       <h3 style="margin:0;">${escapeHtml(s.name)} — Tuition &amp; Fees</h3>
       <div style="display:flex;gap:8px;">
         <button class="btn-ghost btn btn-sm" onclick="printTuitionStatements(['${s.id}'])">🖨 Print statement</button>
+        ${emailNotificationsReady()? `<button class="btn-ghost btn btn-sm" onclick="emailTuitionStatement('${s.id}')">✉ Email statement</button>` : ''}
+        ${summary.balance>0? `<button class="btn-ghost btn btn-sm" onclick="openPayNowModal('${s.id}')">💳 Pay now</button>` : ''}
         ${canManage? `<button class="btn btn-sm" onclick="openRecordTuitionPaymentModal('${s.id}')">+ Record a payment</button>` : ''}
       </div>
     </div>
@@ -17773,31 +18320,59 @@ function deleteTuitionPayment(id){
     saveState(); renderContent(); toast('Deleted');
   }, 'Delete payment');
 }
+// Splits a requested student id list into billing groups: a combined-statement family becomes
+// ONE group (expanded to every current member, even if only one sibling's id was passed in);
+// everyone else stays their own single-student group.
+function tuitionStatementGroups(studentIds){
+  const seen = new Set();
+  const groups = [];
+  studentIds.forEach(id=>{
+    if(seen.has(id)) return;
+    const student = byId(STATE.students, id);
+    if(!student) return;
+    const family = familyForStudent(id);
+    if(family && family.combinedStatement){
+      const members = familyMembersForYear(family, STATE.currentYear).filter(s=>!seen.has(s.id));
+      if(!members.length) return;
+      members.forEach(m=>seen.add(m.id));
+      groups.push({family, students: members});
+    } else {
+      seen.add(id);
+      groups.push({family:null, students:[student]});
+    }
+  });
+  return groups;
+}
 function printTuitionStatements(studentIds){
-  const students = studentIds.map(id=>byId(STATE.students,id)).filter(Boolean);
-  if(!students.length) return;
+  const groups = tuitionStatementGroups(studentIds);
+  if(!groups.length) return;
   const asOf = todayISO();
-  const sections = students.map((s,idx)=>{
-    const summary = studentTuitionSummary(s.id);
-    const billTo = mailingRecipientLine('parents', s);
-    const payments = STATE.tuitionPayments.filter(p=>p.studentId===s.id).sort((a,b)=>a.date.localeCompare(b.date));
+  const chargeAndPaymentTablesFor = (s)=>{
     const rows = (s.tuitionItems||[]).filter(i=>i.active!==false).map(item=>{
       const ft = byId(STATE.tuitionFeeTypes, item.feeTypeId);
       return `<tr><td>${escapeHtml(ft?ft.name:'')}</td><td>${item.frequency==='oneTime'?'One-time':item.frequency==='yearly'?'Yearly':'Monthly'}</td><td>${fmtMoney(item.amount)}</td><td>${fmtMoney(tuitionItemAmountDue(item, asOf))}</td></tr>`;
     }).join('');
+    const payments = STATE.tuitionPayments.filter(p=>p.studentId===s.id).sort((a,b)=>a.date.localeCompare(b.date));
     const paymentRows = payments.map(p=>{
       const item = p.feeItemId ? (s.tuitionItems||[]).find(i=>i.id===p.feeItemId) : null;
       const ft = item ? byId(STATE.tuitionFeeTypes, item.feeTypeId) : null;
       return `<tr><td>${fmtDate(p.date)}</td><td>${ft?escapeHtml(ft.name):'—'}</td><td>${escapeHtml(p.method||'')}</td><td>${fmtMoney(p.amount)}</td></tr>`;
     }).join('') || '<tr><td colspan="4" class="muted">No payments recorded</td></tr>';
-    // Laid out like a real billing statement — a "Billed To" block addressed to the actual
-    // paying party (parent/guardian, same name resolution used for mailing labels), not just
-    // the student's own name/class the way the original version only showed. Anyone reading
-    // this cold — a bookkeeper, an accountant, the family itself — expects to see who it's
-    // addressed to and when it was generated before the line-item detail underneath.
+    return `<h4 style="margin:16px 0 6px;">Charges</h4>
+      <table><thead><tr><th>Item</th><th>Frequency</th><th>Rate</th><th>Charged to date</th></tr></thead><tbody>${rows}</tbody></table>
+      <h4 style="margin:16px 0 6px;">Payments</h4>
+      <table><thead><tr><th>Date</th><th>Fee</th><th>Method</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>`;
+  };
+  const sections = groups.map((g,idx)=>{
+    const students = g.students;
+    const primary = students[0];
+    const summaries = students.map(s=>studentTuitionSummary(s.id, asOf));
+    const combinedBalance = summaries.reduce((sum,x)=>sum+x.balance,0);
+    const billTo = mailingRecipientLine('parents', primary);
+    const isFamily = students.length>1;
     return `<div style="${idx?'page-break-before:always;':''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:18px;">
-        <h2 style="margin:0;">Tuition Statement</h2>
+        <h2 style="margin:0;">${isFamily?'Family Tuition Statement':'Tuition Statement'}</h2>
         <div class="small muted" style="text-align:right;">Statement date: ${fmtDate(asOf)}</div>
       </div>
       <div style="display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:18px;">
@@ -17807,25 +18382,101 @@ function printTuitionStatements(studentIds){
           ${billTo.address? `<div>${formatAddressForPrint(billTo.address)}</div>` : '<div class="muted">No address on file</div>'}
         </div>
         <div style="text-align:right;">
-          <div class="small" style="text-transform:uppercase;letter-spacing:.04em;color:#655C6D;font-weight:700;margin-bottom:3px;">Student</div>
-          <div style="font-weight:600;">${escapeHtml(s.name)}</div>
-          <div>${escapeHtml(className(s.classId))}</div>
+          <div class="small" style="text-transform:uppercase;letter-spacing:.04em;color:#655C6D;font-weight:700;margin-bottom:3px;">${isFamily?'Students':'Student'}</div>
+          ${students.map(s=>`<div style="font-weight:600;">${escapeHtml(s.name)} <span class="small" style="font-weight:400;">— ${escapeHtml(className(s.classId))}</span></div>`).join('')}
           <div>${escapeHtml(STATE.currentYear)}</div>
         </div>
       </div>
-      <h4 style="margin:16px 0 6px;">Charges</h4>
-      <table><thead><tr><th>Item</th><th>Frequency</th><th>Rate</th><th>Charged to date</th></tr></thead><tbody>${rows}</tbody></table>
-      <h4 style="margin:16px 0 6px;">Payments</h4>
-      <table><thead><tr><th>Date</th><th>Fee</th><th>Method</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>
+      ${isFamily
+        ? students.map((s,i)=>`<div style="${i?'margin-top:20px;border-top:1px solid #E4DCE2;padding-top:14px;':''}">
+            <h3 style="margin:0 0 4px;">${escapeHtml(s.name)} <span style="font-size:11px;font-weight:400;">${studentIdPrintTag(s)}</span></h3>
+            ${chargeAndPaymentTablesFor(s)}
+            <div class="small muted" style="text-align:right;">Balance for ${escapeHtml(s.name)}: <strong>${fmtMoney(summaries[i].balance)}</strong></div>
+          </div>`).join('')
+        : `<div style="font-size:11px;margin-bottom:4px;">${studentIdPrintTag(primary)}</div>${chargeAndPaymentTablesFor(primary)}`}
       <div style="margin-top:16px;border:2px solid #500F32;border-radius:8px;padding:10px 16px;display:inline-block;">
-        <div class="small" style="text-transform:uppercase;letter-spacing:.04em;color:#500F32;font-weight:700;">Balance Due</div>
-        <div style="font-size:20px;font-weight:700;color:${summary.balance>0?'#B5720A':'#1E7A4C'};">${fmtMoney(summary.balance)}</div>
+        <div class="small" style="text-transform:uppercase;letter-spacing:.04em;color:#500F32;font-weight:700;">${isFamily?'Total Balance Due (all children)':'Balance Due'}</div>
+        <div style="font-size:20px;font-weight:700;color:${combinedBalance>0?'#B5720A':'#1E7A4C'};">${fmtMoney(combinedBalance)}</div>
       </div>
     </div>`;
   }).join('');
   const win = window.open('', '_blank');
-  win.document.write(letterheadHtml(sections, `Tuition Statement${students.length>1?'s':''}`));
+  win.document.write(letterheadHtml(sections, `Tuition Statement${groups.length>1?'s':''}`));
   win.document.close();
+}
+function tuitionStatementEmailText(studentId){
+  const s = byId(STATE.students, studentId);
+  const asOf = todayISO();
+  const summary = studentTuitionSummary(studentId, asOf);
+  const chargeLines = (s.tuitionItems||[]).filter(i=>i.active!==false).map(item=>{
+    const ft = byId(STATE.tuitionFeeTypes, item.feeTypeId);
+    const freqLabel = item.frequency==='oneTime'?'One-time':item.frequency==='yearly'?'Yearly':'Monthly';
+    return `  ${ft?ft.name:'(fee)'} — ${freqLabel} at ${fmtMoney(item.amount)} — charged to date: ${fmtMoney(tuitionItemAmountDue(item, asOf))}`;
+  }).join('\n') || '  (none on file)';
+  const payments = STATE.tuitionPayments.filter(p=>p.studentId===studentId).sort((a,b)=>a.date.localeCompare(b.date));
+  const paymentLines = payments.map(p=>`  ${fmtDate(p.date)} — ${fmtMoney(p.amount)}${p.method?' ('+p.method+')':''}`).join('\n') || '  (none recorded)';
+  return `Tuition Statement for ${s.name} — as of ${fmtDate(asOf)}\n\nCharges:\n${chargeLines}\n\nPayments received:\n${paymentLines}\n\nBalance due: ${fmtMoney(summary.balance)}\n\nQuestions about this statement? Please contact the office.`;
+}
+function familyTuitionStatementEmailText(students){
+  const asOf = todayISO();
+  const names = students.map(s=>s.name).join(', ');
+  let combinedBalance = 0;
+  const perChild = students.map(s=>{
+    const summary = studentTuitionSummary(s.id, asOf);
+    combinedBalance += summary.balance;
+    const chargeLines = (s.tuitionItems||[]).filter(i=>i.active!==false).map(item=>{
+      const ft = byId(STATE.tuitionFeeTypes, item.feeTypeId);
+      const freqLabel = item.frequency==='oneTime'?'One-time':item.frequency==='yearly'?'Yearly':'Monthly';
+      return `    ${ft?ft.name:'(fee)'} — ${freqLabel} at ${fmtMoney(item.amount)} — charged to date: ${fmtMoney(tuitionItemAmountDue(item, asOf))}`;
+    }).join('\n') || '    (none on file)';
+    const payments = STATE.tuitionPayments.filter(p=>p.studentId===s.id).sort((a,b)=>a.date.localeCompare(b.date));
+    const paymentLines = payments.map(p=>`    ${fmtDate(p.date)} — ${fmtMoney(p.amount)}${p.method?' ('+p.method+')':''}`).join('\n') || '    (none recorded)';
+    return `${s.name}:\n  Charges:\n${chargeLines}\n  Payments received:\n${paymentLines}\n  Balance for ${s.name}: ${fmtMoney(summary.balance)}`;
+  }).join('\n\n');
+  return `Family Tuition Statement for ${names} — as of ${fmtDate(asOf)}\n\n${perChild}\n\nTotal balance due (all children): ${fmtMoney(combinedBalance)}\n\nQuestions about this statement? Please contact the office.`;
+}
+async function emailTuitionStatement(studentId, silent){
+  const s = byId(STATE.students, studentId); if(!s) return {sent:false};
+  if(!emailNotificationsReady()){ if(!silent) toast('Set up EmailJS in Settings → Email notifications first'); return {sent:false}; }
+  const family = familyForStudent(studentId);
+  const groupStudents = (family && family.combinedStatement) ? familyMembersForYear(family, STATE.currentYear) : [s];
+  const groupNames = groupStudents.map(x=>x.name).join(' & ');
+  const contactsMap = new Map();
+  groupStudents.forEach(st=>studentParentEmails(st).forEach(c=>{
+    const key = normalizeEmailForMatch(c.email);
+    if(key && !contactsMap.has(key)) contactsMap.set(key, c);
+  }));
+  const contacts = [...contactsMap.values()];
+  if(!contacts.length){ if(!silent) toast(`No parent email on file for ${groupNames}`); return {sent:false}; }
+  ensureEmailjsInit();
+  const message = groupStudents.length>1 ? familyTuitionStatementEmailText(groupStudents) : tuitionStatementEmailText(studentId);
+  let anySent = false;
+  for(const c of contacts){
+    try{
+      await emailjs.send(STATE.emailjsConfig.serviceId, STATE.emailjsConfig.templateId, {
+        to_email: c.email, to_name: c.label, subject: `Tuition Statement — ${groupNames}`, message, school_name: STATE.schoolName,
+      });
+      anySent = true;
+    }catch(e){ console.error('Tuition statement email failed:', e); }
+  }
+  if(!silent) toast(anySent? `✓ Statement emailed for ${groupNames}` : `Could not email the statement for ${groupNames} — check your EmailJS setup`);
+  return {sent:anySent};
+}
+async function emailTuitionStatementsBulk(studentIds){
+  if(!emailNotificationsReady()){ toast('Set up EmailJS in Settings → Email notifications first'); return; }
+  let sent=0, skipped=0;
+  const processed = new Set();
+  for(let i=0;i<studentIds.length;i++){
+    const id = studentIds[i];
+    if(processed.has(id)) continue;
+    const family = familyForStudent(id);
+    if(family && family.combinedStatement) familyMembersForYear(family, STATE.currentYear).forEach(m=>processed.add(m.id));
+    else processed.add(id);
+    const res = await emailTuitionStatement(id, true);
+    if(res.sent) sent++; else skipped++;
+  }
+  toast(`✓ Emailed ${sent} statement(s)${skipped?`, ${skipped} skipped (no parent email on file, or the send failed)`:''}`);
+  renderContent();
 }
 function isAssignedToAnyRoute(staffId){
   // A driver can be assigned to a regular AM/PM route, OR to a one-time/repeating Custom Trip
@@ -22338,6 +22989,7 @@ function renderTransportBroadcastTab(){
       </select>
     </div>
     <button class="btn" onclick="openBroadcastFromTab()">Continue</button>
+    <button class="btn-ghost btn" style="margin-left:8px;" onclick="renderBroadcastHistoryModal()">📜 Broadcast history</button>
   </div>`;
 }
 function openBroadcastFromTab(){
@@ -22410,6 +23062,10 @@ async function sendTransportBroadcast(message, viaSms, viaVoice){
   const parts = [];
   if(viaSms) parts.push(`${smsSent} text(s) sent${smsFailed?`, ${smsFailed} failed`:''}${smsSkipped?`, ${smsSkipped} skipped (not opted in to texting)`:''}`);
   if(viaVoice) parts.push(`${callSent} call(s) placed${callFailed?`, ${callFailed} failed`:''}`);
+  logBroadcastHistory({
+    kind:'transport', label: window.__broadcastLabel||'', message,
+    viaSms, viaVoice, smsSent, smsFailed, smsSkipped, callSent, callFailed,
+  });
   closeModal();
   toast(`✓ Broadcast complete — ${parts.join(' · ')}`);
 }

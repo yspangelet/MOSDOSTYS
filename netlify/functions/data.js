@@ -12,7 +12,7 @@ const APP_STORE = 'appdata';
 // roles/rolePermissions used to be hard-locked here too; they're now gated by the
 // managePermissions permission instead (see the dedicated check below), so a role like
 // "Director" can be granted control over that screen without editing this file again.
-const STRICT_ADMIN_FIELDS = ['years', 'currentYear'];
+const STRICT_ADMIN_FIELDS = ['years', 'currentYear', 'weeklyComplianceSchedule'];
 // Other Settings fields, each gated by its own assignable permission (see PERMISSION_DEFS
 // in the frontend) rather than being hard-locked to Admin.
 const FIELD_PERMISSION_MAP = {
@@ -36,6 +36,9 @@ const FIELD_PERMISSION_MAP = {
   transportRoutes: 'manageTransportRoutes',
   transportNotifications: 'manageTransportNotifications',
   googleMapsApiKey: 'manageTransportNotifications',
+  paymentProcessor: 'manageBilling',
+  families: 'manageFamilies',
+  familySuggestionDismissals: 'manageFamilies',
 };
 // These mirror the Setup tab, gated by the configurable "editSetup" permission.
 const SETUP_FIELDS = ['staff', 'classes', 'students'];
@@ -718,7 +721,7 @@ exports.handler = async (event) => {
     const role = roleOf(realState, payload.staffId);
     if (role !== 'Admin') return json(403, { error: 'Only an Admin can copy real data into Test Mode' });
 
-    const EXCLUDED_KEYS = new Set(['transportNotifications', 'googleMapsApiKey', 'emailjsConfig',
+    const EXCLUDED_KEYS = new Set(['transportNotifications', 'googleMapsApiKey', 'emailjsConfig', 'paymentProcessor',
       'staffDocuments', 'studentDocuments', 'generalDocuments', 'masterDocuments']);
     const snapshot = {};
     for (const [key, value] of Object.entries(realState)) {
