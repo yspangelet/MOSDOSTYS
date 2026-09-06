@@ -3699,30 +3699,30 @@ function render(){
         </div>
         <div class="nav-section">
           ${roleCanSeeTab(currentStaff().role,'dashboard')? navItem('dashboard','🏠','Dashboard') : ''}
-          ${(currentStaff().role==='Admin' || can('accessLeadershipMeetings') || can('manageAdminMeetingGroups'))? navItem('leadershipmeetings','📋','Admin Meetings') : ''}
-          ${roleCanSeeTab(currentStaff().role,'attendance')? navItem('attendance','✔️','Attendance') : ''}
-          ${(BACKEND_MODE && currentStaff().role==='Admin')? navItem('auditlog','🛡️','Audit Log') : ''}
-          ${(currentStaff().role==='Admin' || can('manageBilling') || can('printBillingSheets'))? navItem('billing','💳','Billing') : ''}
-          ${roleCanSeeTab(currentStaff().role,'calendar')? navItem('calendar','🌙','Calendar') : ''}
-          ${roleCanSeeTab(currentStaff().role,'setup')? navItem('setup','🏷️','Classes') : ''}
-          ${(currentStaff().role==='Admin' || can('manageHRIntake') || can('approveOnboardingDocs'))? navItem('onboardingDocReview','📄','Document Review') : ''}
-          ${(currentStaff().role==='Admin' || can('manageFamilies') || can('viewFamilies'))? navItem('families','👪','Families') : ''}
-          ${roleCanSeeTab(currentStaff().role,'lessonplans')? navItem('lessonplans','📚','Lesson Plans & Goals') : ''}
-          ${roleCanSeeTab(currentStaff().role,'messages')? navItem('messages','✉️','Messages', unreadMessageCount()) : ''}
-          ${(currentStaff().role==='Admin' || can('manageHRIntake') || can('signBoardApprovals'))? navItem('hireapps','💼', can('manageHRIntake')||currentStaff().role==='Admin' ? 'New Hire Applications' : 'Sign as Board President') : ''}
-          ${can('viewOversight')? navItem('oversight','🔎','Oversight') : ''}
-          ${roleCanSeeTab(currentStaff().role,'contacts')? navItem('contacts','☎️','Parent Contact Log') : ''}
-          ${roleCanSeeTab(currentStaff().role,'printcenter')? navItem('printcenter','🖨️','Print &amp; Document Center') : ''}
-          ${(currentStaff().role==='Admin' || can('manageRegistration') || can('viewRegistration'))? navItem('registration','📋','Registration') : ''}
-          ${roleCanSeeTab(currentStaff().role,'reports')? navItem('reports','📄','Reports & Assessments') : ''}
-          ${roleCanSeeTab(currentStaff().role,'schedule')? navItem('schedule','🗓️','Schedule') : ''}
-          ${roleCanSeeTab(currentStaff().role,'search')? navItem('search','🔍','Search') : ''}
-          ${(currentStaff().role==='Admin' || can('editServiceDefaults') || can('editContactRules') || can('editLessonPlanRule') || can('manageTemplates') || can('editSchoolCalendar'))? navItem('servicereqs','🎯','Service Requirements') : ''}
-          ${roleCanSeeTab(currentStaff().role,'notes')? navItem('notes','📝','Session Notes') : ''}
-          ${roleCanSeeTab(currentStaff().role,'staff')? navItem('staff','🧑','Staff') : ''}
           ${roleCanSeeTab(currentStaff().role,'students')? navItem('students','👦','Students') : ''}
+          ${roleCanSeeTab(currentStaff().role,'staff')? navItem('staff','🧑','Staff') : ''}
+          ${roleCanSeeTab(currentStaff().role,'setup')? navItem('setup','🏷️','Classes') : ''}
+          ${roleCanSeeTab(currentStaff().role,'schedule')? navItem('schedule','🗓️','Schedule') : ''}
+          ${roleCanSeeTab(currentStaff().role,'calendar')? navItem('calendar','🌙','Calendar') : ''}
+          ${roleCanSeeTab(currentStaff().role,'attendance')? navItem('attendance','✔️','Attendance') : ''}
+          ${roleCanSeeTab(currentStaff().role,'notes')? navItem('notes','📝','Session Notes') : ''}
+          ${roleCanSeeTab(currentStaff().role,'lessonplans')? navItem('lessonplans','📚','Lesson Plans & Goals') : ''}
+          ${roleCanSeeTab(currentStaff().role,'reports')? navItem('reports','📄','Reports & Assessments') : ''}
+          ${roleCanSeeTab(currentStaff().role,'contacts')? navItem('contacts','☎️','Parent Contact Log') : ''}
+          ${roleCanSeeTab(currentStaff().role,'messages')? navItem('messages','✉️','Messages', unreadMessageCount()) : ''}
           ${roleCanSeeTab(currentStaff().role,'teammeetings')? navItem('teammeetings','🗣️','Team Meetings') : ''}
+          ${(currentStaff().role==='Admin' || can('accessLeadershipMeetings') || can('manageAdminMeetingGroups'))? navItem('leadershipmeetings','📋','Admin Meetings') : ''}
+          ${(currentStaff().role==='Admin' || can('manageRegistration') || can('viewRegistration'))? navItem('registration','📋','Registration') : ''}
+          ${(currentStaff().role==='Admin' || can('manageBilling') || can('printBillingSheets'))? navItem('billing','💳','Billing') : ''}
+          ${(currentStaff().role==='Admin' || can('manageFamilies') || can('viewFamilies'))? navItem('families','👪','Families') : ''}
           ${(currentStaff().role==='Admin' || can('manageTransportSetup') || can('manageTransportRoutes') || can('viewTransportReports') || can('manageTransportNotifications') || can('sendTransportBroadcasts') || isAssignedToAnyRoute(VIEW.userId))? navItem('transportation','🚌','Transportation') : ''}
+          ${roleCanSeeTab(currentStaff().role,'printcenter')? navItem('printcenter','🖨️','Print &amp; Document Center') : ''}
+          ${roleCanSeeTab(currentStaff().role,'search')? navItem('search','🔍','Search') : ''}
+          ${can('viewOversight')? navItem('oversight','🔎','Oversight') : ''}
+          ${(currentStaff().role==='Admin' || can('manageHRIntake') || can('signBoardApprovals'))? navItem('hireapps','💼', can('manageHRIntake')||currentStaff().role==='Admin' ? 'New Hire Applications' : 'Sign as Board President') : ''}
+          ${(currentStaff().role==='Admin' || can('manageHRIntake') || can('approveOnboardingDocs'))? navItem('onboardingDocReview','📄','Document Review') : ''}
+          ${(BACKEND_MODE && currentStaff().role==='Admin')? navItem('auditlog','🛡️','Audit Log') : ''}
+          ${(currentStaff().role==='Admin' || can('editServiceDefaults') || can('editContactRules') || can('editLessonPlanRule') || can('manageTemplates') || can('editSchoolCalendar'))? navItem('servicereqs','🎯','Service Requirements') : ''}
           ${(currentStaff().role==='Admin' || can('managePermissions') || can('manageAccounts') || can('editSchoolInfo') || can('manageEmailSettings') || can('manageAbsencePolicy') || can('manageLobbyDisplay'))? navItem('settings','⚙️','Settings') : ''}
         </div>
         <div class="nav-foot">${BACKEND_MODE?`<span class="link" style="opacity:1;color:#fff;text-decoration:underline;" onclick="signOut()">⎋ Sign out</span>`:''}<div class="small" style="opacity:.55;margin-top:6px;color:#fff;">© 2026 by YSpangelet</div><div class="small" style="opacity:.4;color:#fff;">${LEDGER_VERSION}</div></div>
@@ -5509,6 +5509,7 @@ function registrationPacketBodyHtml(family){
   return `
     <div dir="auto" style="margin-bottom:24px;line-height:1.6;">${letterBody}</div>
     <div style="page-break-before:always;">
+      ${letterheadHeaderHtml()}
       <h2 style="text-align:center;margin-top:0;">PARENT / STUDENT INFORMATION</h2>
       <h3 style="margin-bottom:6px;">Family Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
@@ -5581,8 +5582,8 @@ function printAllRegistrationsAndContracts(){
   const combined = families.map((f,i)=>{
     const contractBody = tuitionContractBodyHtml(f);
     if(!contractBody) missingContract++;
-    const section = registrationPacketBodyHtml(f) + (contractBody ? `<div style="page-break-before:always;">${contractBody}</div>` : '');
-    return i===0 ? section : `<div style="page-break-before:always;">${section}</div>`;
+    const section = registrationPacketBodyHtml(f) + (contractBody ? `<div style="page-break-before:always;">${letterheadHeaderHtml()}${contractBody}</div>` : '');
+    return i===0 ? section : `<div style="page-break-before:always;">${letterheadHeaderHtml()}${section}</div>`;
   }).join('');
   if(missingContract) toast(`Tuition Contract skipped for ${missingContract} famil${missingContract===1?'y':'ies'} — set up Tuition Contract Pricing in Settings to include it for everyone`);
   const win = window.open('', '_blank');
@@ -5596,7 +5597,7 @@ function printRegistrationAndContract(anyStudentIdInFamily){
   if(!family){ toast('Could not find that family'); return; }
   const contractBody = tuitionContractBodyHtml(family);
   const familyDisplayName = registrationFamilyDisplayName(family.students[0]);
-  const combined = registrationPacketBodyHtml(family) + (contractBody ? `<div style="page-break-before:always;">${contractBody}</div>` : '');
+  const combined = registrationPacketBodyHtml(family) + (contractBody ? `<div style="page-break-before:always;">${letterheadHeaderHtml()}${contractBody}</div>` : '');
   if(!contractBody) toast('Printing Registration only — set up Tuition Contract Pricing in Settings to include the contract too');
   const win = window.open('', '_blank');
   win.document.write(letterheadHtml(combined, `Registration & Tuition Contract — ${familyDisplayName}`, familyDisplayName));
@@ -14266,16 +14267,20 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
   // body content just below, so this ONLY needs to appear starting from page 2 (via the
   // "@page :first" override below, the standard CSS Paged Media way to vary just the first
   // page's margin boxes) — otherwise a multi-page document reads as headerless past page 1, and
-  // a page separated from the rest of the printout has nothing identifying it at a glance. The
-  // actual logo image (not just the school name as text) — Chrome 131+/Safari 18.2+ support an
-  // image as page-margin-box content the same way the footer's text content is already supported
-  // in this file; sized to fit comfortably within the reserved top margin below.
-  const logoSrc = currentBrandLogoSrc();
-  const topHeaderCss = logoSrc ? `
+  // a page separated from the rest of the printout has nothing identifying it at a glance.
+  // Text, NOT the logo image: an actual printed test showed the image rendering at full/
+  // uncontrolled size inside the margin box — the width/height CSS meant to constrain it was
+  // silently ignored, and the oversized logo covered the entire page, making the form
+  // unreadable. That's a real, confirmed rendering failure, not a theoretical risk, so this
+  // reverts to the school name as text — the exact same margin-box mechanism the footer already
+  // uses successfully below, with none of that sizing risk.
+  const topHeaderCss = brandName ? `
         @top-center {
-          content: url("${logoSrc}");
-          width: auto;
-          height: 30pt;
+          content: "${cssContentEscape(brandName)}";
+          font-family: Georgia,'Times New Roman',serif;
+          font-weight: 700;
+          font-size: 10.5pt;
+          color: #500F32;
         }` : '';
   // No external font <link> — pop-up windows populated via document.write() are unreliable at
   // loading external stylesheets (Safari especially will just drop it silently), which is what
@@ -14284,7 +14289,7 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
   return `<html><head><meta charset="UTF-8"><title>${escapeHtml(docTitle)} — ${escapeHtml(brandName)}</title>
     <style>
       @page {
-        margin: 1in 0.55in 0.55in 0.55in;
+        margin: 0.85in 0.55in 0.55in 0.55in;
         /* Page numbers (and, when provided, the repeating identifying-info line and header) via
            CSS page margin boxes — native support landed in Chrome 131 (Nov 2024) and Safari 18.2
            (Dec 2024), so this renders correctly for most people printing or "Save as PDF"-ing
