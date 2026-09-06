@@ -525,6 +525,7 @@ function seedState(){
   ];
   return {
     years:[y1,y2], currentYear:y2, schoolName:'Your School', schoolAddress:'', schoolPhone:'', schoolEIN:'',
+    branches:[{ id:'branch_main', name:'Your School', assumedName:'', hasLogo:false, address:'', phone:'' }],
     dayHours:{Mon:{start:'8:00',end:'15:30'}, Tue:{start:'8:00',end:'15:30'}, Wed:{start:'8:00',end:'15:30'}, Thu:{start:'8:00',end:'15:30'}, Fri:{start:'8:00',end:'12:00'}, Sat:{start:'8:00',end:'15:30'}},
     schoolDays:['Mon','Tue','Wed','Thu','Fri'],
     lunchBreak:{enabled:true, start:'12:00', end:'12:30'},
@@ -650,8 +651,8 @@ window.addEventListener('unhandledrejection', (e)=>{
 });
 const backendLoadState = ()=> backendFetch('/data', {method:'GET'});
 const backendSaveState = (changedKeys, wipeSummary, allowEmptyFields)=> backendFetch('/data', {method:'POST', body: JSON.stringify({changedKeys, ...(wipeSummary?{wipeSummary}:{}), ...(allowEmptyFields&&allowEmptyFields.length?{allowEmptyFields}:{})})});
-const backendGetLogo = (year)=> backendFetch('/data?resource=logo'+(year?'&year='+encodeURIComponent(year):''), {method:'GET'});
-const backendSaveLogo = (logo, year)=> backendFetch('/data?resource=logo'+(year?'&year='+encodeURIComponent(year):''), {method:'POST', body: JSON.stringify({logo})});
+const backendGetLogo = (year, branch)=> backendFetch('/data?resource=logo'+(branch?'&branch='+encodeURIComponent(branch):(year?'&year='+encodeURIComponent(year):'')), {method:'GET'});
+const backendSaveLogo = (logo, year, branch)=> backendFetch('/data?resource=logo'+(branch?'&branch='+encodeURIComponent(branch):(year?'&year='+encodeURIComponent(year):'')), {method:'POST', body: JSON.stringify({logo})});
 const backendGetMessagePhoto = (id)=> backendFetch('/data?resource=messagePhoto&id='+id, {method:'GET'});
 const backendGetStudentPhoto = (id)=> backendFetch('/data?resource=studentPhoto&id='+id, {method:'GET'});
 const backendSaveStudentPhoto = (id, photo)=> backendFetch('/data?resource=studentPhoto&id='+id, {method:'POST', body: JSON.stringify({photo})});
@@ -1328,7 +1329,7 @@ async function loadState(){
     if(remote && remote.__bootstrapAdmin){
       const info = remote.__bootstrapAdmin;
       STATE.staff = STATE.staff.filter(s=>s.role!=='Admin');
-      STATE.staff.push({id:info.staffId, name:info.name, email:info.email, role:info.role||'Admin', access:{type:'all',studentIds:[]}});
+      STATE.staff.push({id:info.staffId, name:info.name, email:info.email, role:info.role||'Admin', access:{type:'all',studentIds:[]}, branchAccess:['all']});
       if(remote.__rolesToCopy && remote.__rolesToCopy.roles && remote.__rolesToCopy.rolePermissions){
         STATE.roles = remote.__rolesToCopy.roles;
         STATE.rolePermissions = remote.__rolesToCopy.rolePermissions;
@@ -1561,6 +1562,12 @@ function migrateState(){
   // yet." See advanceGpsStopProgress. Persisted (unlike transportLiveLocations, which only holds
   // the latest ping) specifically so this survives even once the live ping itself goes stale.
   STATE.transportGpsProgress = STATE.transportGpsProgress || {};
+  // Multi-branch support: a school with only ever one location gets exactly one branch here,
+  // built from its existing school name/logo, and every filter keyed off STATE.branches.length<=1
+  // becomes a no-op — so this migration is invisible until an Admin actually adds a second branch
+  // in Settings. staff/students/classes created before branches existed have no branchId at all;
+  // recordBranchId() treats that as "belongs to the first branch" rather than hiding them.
+  STATE.branches = STATE.branches || [{ id:'branch_main', name: STATE.schoolName||'Main Branch', assumedName:'', hasLogo:false, address: STATE.schoolAddress||'', phone: STATE.schoolPhone||'' }];
   // Live position pings from a driver's own phone while Driver View is open — see
   // startSharingLiveLocation. Keyed the same way as transportLog (routeId_direction), holding
   // just the latest ping; nothing here is a location HISTORY, only "where are they right now."
@@ -1971,9 +1978,74 @@ function avatarColorFor(name){
   return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
 }
 function className(id){ const c=byId(STATE.classes,id); return c? c.name : '—'; }
-function studentsOfYear(){ return STATE.students.filter(s=>s.year===STATE.currentYear); }
-function classesOfYear(){ return STATE.classes.filter(c=>c.year===STATE.currentYear).sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0)); }
+// Every branch id the CURRENTLY SIGNED-IN staff member is allowed to see at all — either every
+// branch that exists (single-branch schools, or a staff member with branchAccess including
+// 'all'), or their own specific list. Never empty for a real staff member: if branches somehow
+// exist but a staff record predates them (no branchAccess field yet), that's treated as full
+// access rather than accidentally locking existing staff out of their own students.
+function accessibleBranchIds(){
+  if(!STATE.branches || STATE.branches.length<=1) return (STATE.branches||[]).map(b=>b.id);
+  const access = (currentStaff()||{}).branchAccess;
+  if(!access || !access.length || access.includes('all')) return STATE.branches.map(b=>b.id);
+  return access;
+}
+// Which branch(es) are actually in view RIGHT NOW — narrows accessibleBranchIds() down to
+// VIEW.currentBranch if the person has picked one specific branch from the switcher (see
+// renderBranchSwitcher), otherwise everything they're allowed to see at once.
+function activeBranchIds(){
+  const accessible = accessibleBranchIds();
+  if(VIEW.currentBranch && VIEW.currentBranch!=='all' && accessible.includes(VIEW.currentBranch)) return [VIEW.currentBranch];
+  return accessible;
+}
+// A record with no branchId at all (anything created before branches existed) is treated as
+// belonging to the FIRST branch — so turning on multi-branch for the first time never silently
+// hides a school's existing roster from itself.
+function recordBranchId(rec){ return (rec && rec.branchId) || (STATE.branches && STATE.branches[0] && STATE.branches[0].id); }
+function studentsOfYear(){
+  const byYear = STATE.students.filter(s=>s.year===STATE.currentYear);
+  if(!STATE.branches || STATE.branches.length<=1) return byYear; // no-op for single-branch schools
+  const ids = activeBranchIds();
+  return byYear.filter(s=>ids.includes(recordBranchId(s)));
+}
+function classesOfYear(){
+  const byYear = STATE.classes.filter(c=>c.year===STATE.currentYear);
+  const sorted = byYear.sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0));
+  if(!STATE.branches || STATE.branches.length<=1) return sorted; // no-op for single-branch schools
+  const ids = activeBranchIds();
+  return sorted.filter(c=>ids.includes(recordBranchId(c)));
+}
 function sessionsOfYear(){ return STATE.sessions.filter(s=>s.year===STATE.currentYear); }
+// Ledger has no separate "family" record — each student carries its own copy of mother/father
+// info, since siblings are just separate student records. Registration & tuition documents are
+// per-FAMILY though (one packet, one contract, with a row per child) — this groups this year's
+// students into families by matching on the combination of father's name + mother's name +
+// street address, which is far more reliable than last name alone (multiple unrelated families
+// can share a surname; siblings should always share both parents' names and a home address).
+// A student missing all three of those (no parent info on file at all) becomes its own
+// single-child "family" rather than being silently merged with an unrelated student that also
+// has nothing on file.
+function familyKeyForStudent(s){
+  const father = ((s.father&&s.father.name)||'').trim().toLowerCase();
+  const mother = ((s.mother&&s.mother.name)||'').trim().toLowerCase();
+  const address = (s.address||'').trim().toLowerCase();
+  const key = [father, mother, address].join('|');
+  return key==='||' ? 'solo_'+s.id : key;
+}
+// Every family in the CURRENTLY VISIBLE roster (respects branch scoping via studentsOfYear),
+// each as {key, students, lastName} sorted oldest-to-youngest child by DOB (undated students last,
+// in whatever order they were already in) — the natural order for a tuition contract's rows.
+function familiesOfYear(){
+  const groups = {};
+  studentsOfYear().forEach(s=>{
+    const key = familyKeyForStudent(s);
+    (groups[key] = groups[key] || []).push(s);
+  });
+  return Object.entries(groups).map(([key, students])=>({
+    key,
+    students: students.slice().sort((a,b)=>(a.dob||'9999').localeCompare(b.dob||'9999')),
+    lastName: studentFamilyLastName(students[0]),
+  })).sort((a,b)=>a.lastName.localeCompare(b.lastName));
+}
 function timeToMin(t){ const [h,m]=t.split(':').map(Number); return h*60+m; }
 function minToTime(m){ const h=Math.floor(m/60), mm=m%60; return h+':'+(mm===0?'00':(mm<10?'0'+mm:mm)); }
 // Native <input type="time"> requires a strictly zero-padded "HH:MM" value/min/max or it silently
@@ -3536,7 +3608,19 @@ function render(){
       <div class="sidebar" id="sidebarEl" style="${window.__isTestMode?'margin-top:30px;':''}">
         <div class="brand">
           <div class="brand-card">
-            <div class="brand-logo-card"><img src="${LOGO_DATA_URI}" alt="${escapeHtml(STATE.schoolName)} logo"></div>
+            ${(()=>{
+              // Only swap away from the main school logo when a SPECIFIC branch is selected (not
+              // "All") and that branch actually has its own logo uploaded — otherwise this always
+              // falls back to the same LOGO_DATA_URI every other screen already uses, so a
+              // single-branch school (or "All" view) sees no change at all.
+              const activeBranch = (STATE.branches.length>1 && VIEW.currentBranch && VIEW.currentBranch!=='all') ? byId(STATE.branches, VIEW.currentBranch) : null;
+              if(activeBranch && activeBranch.hasLogo){
+                if(!window.__branchLogoCache[activeBranch.id]) prefetchBranchLogo(activeBranch.id).then(()=>render());
+                const src = window.__branchLogoCache[activeBranch.id] || LOGO_DATA_URI;
+                return `<div class="brand-logo-card"><img src="${src}" alt="${escapeHtml(activeBranch.name)} logo"></div>`;
+              }
+              return `<div class="brand-logo-card"><img src="${LOGO_DATA_URI}" alt="${escapeHtml(STATE.schoolName)} logo"></div>`;
+            })()}
             <div class="brand-divider"></div>
             <div class="brand-mark"><span class="brand-flag"></span>Ledger</div>
             <div class="brand-sub">School operations</div>
@@ -3593,6 +3677,12 @@ function render(){
           <div class="field-inline">Academic Year
             <select id="yearSelect">${STATE.years.map(y=>`<option value="${y}" ${y===STATE.currentYear?'selected':''}>${y}</option>`).join('')}</select>
           </div>
+          ${(STATE.branches.length>1 && accessibleBranchIds().length>1) ? `<div class="field-inline">Branch
+            <select id="branchSelect" onchange="VIEW.currentBranch=this.value;renderContent();">
+              <option value="all" ${(!VIEW.currentBranch||VIEW.currentBranch==='all')?'selected':''}>All (${accessibleBranchIds().length})</option>
+              ${accessibleBranchIds().map(id=>{ const b=byId(STATE.branches,id); return b? `<option value="${b.id}" ${VIEW.currentBranch===b.id?'selected':''}>${escapeHtml(b.name)}</option>` : ''; }).join('')}
+            </select>
+          </div>` : ''}
           <div class="field-inline">${BACKEND_MODE
             ? (VIEW.realUserId
                 ? `<strong>Viewing as ${escapeHtml(currentStaff().name)}${currentStaff().nickname?` "${escapeHtml(currentStaff().nickname)}"`:''}</strong> — ${escapeHtml(currentStaff().role)}`
@@ -5194,6 +5284,69 @@ function printStaffRecord(staffId){
   win.document.write(letterheadHtml(body, `Staff Record — ${staff.name}`));
   win.document.close();
 }
+// Tuition Contract — one printed document per FAMILY (see familiesOfYear), with one table row
+// per child rather than the fixed two-row table in the original paper form. Follows the same
+// letterheadHtml print pattern as every other document in the app (printStaffRecord, printGoals,
+// route sheets) rather than a real .docx file, which also means the Hebrew/Yiddish text renders
+// correctly via plain HTML dir="rtl" with no extra bidi handling needed. Amounts the FAMILY is
+// meant to choose (tuition tier, payment method) print as blank checkboxes for them to mark by
+// hand, matching the original paper form — this is a print-and-sign document, not a live
+// calculator, so nothing here is meant to auto-total.
+function printTuitionContract(anyStudentIdInFamily){
+  const anchor = byId(STATE.students, anyStudentIdInFamily);
+  if(!anchor){ toast('Could not find that student'); return; }
+  const family = familiesOfYear().find(f=>f.key===familyKeyForStudent(anchor));
+  if(!family){ toast('Could not find that family'); return; }
+  const first = family.students[0];
+  const address = [first.address, first.city, first.state, first.zip].filter(Boolean);
+  const familyDisplayName = studentParentSalutationFormal(first);
+  const rowsHtml = family.students.map(s=>`
+    <tr>
+      <td style="padding:8px;border:1px solid #999;">${escapeHtml(s.name)}</td>
+      <td style="padding:8px;border:1px solid #999;text-align:center;">${escapeHtml(className(s.classId))}</td>
+      <td style="padding:8px;border:1px solid #999;text-align:center;">☐ $450</td>
+      <td style="padding:8px;border:1px solid #999;text-align:center;">☐ $550</td>
+      <td style="padding:8px;border:1px solid #999;text-align:center;">☐ $650</td>
+    </tr>`).join('');
+  const body = `
+    <div dir="rtl" style="text-align:center;font-weight:700;font-size:15pt;margin-bottom:2px;">שטר הסכם לשכר לימוד לשנת הלימודים תשפ"ז לפ"ק</div>
+    <div style="text-align:center;font-weight:700;font-size:13pt;margin-bottom:18px;">Tuition Contract — School Year ${escapeHtml(STATE.currentYear)}</div>
+    <div style="margin-bottom:16px;">
+      <div><strong>Name:</strong> ${escapeHtml(familyDisplayName)}</div>
+      <div><strong>Address:</strong> ${escapeHtml(address.join(', '))}</div>
+    </div>
+    <div dir="rtl" style="margin-bottom:8px;font-weight:600;">ביטע צייכנט אן וועלכע פרייזן איר זענט גרייט זיך אינטערצונעמען:</div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
+      <thead><tr style="background:#F1E3EC;">
+        <th style="padding:8px;border:1px solid #999;">Student name</th>
+        <th style="padding:8px;border:1px solid #999;">Class</th>
+        <th style="padding:8px;border:1px solid #999;" dir="rtl">בני תורה</th>
+        <th style="padding:8px;border:1px solid #999;" dir="rtl">בעלי בתים</th>
+        <th style="padding:8px;border:1px solid #999;" dir="rtl">בעלי יכולת</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
+      <tr><td style="padding:8px;border:1px solid #999;">Yearly Transportation</td><td style="padding:8px;border:1px solid #999;width:120px;">$__________</td></tr>
+      <tr><td style="padding:8px;border:1px solid #999;">Yearly Snack (Class ט)</td><td style="padding:8px;border:1px solid #999;">$150.00</td></tr>
+      <tr><td style="padding:8px;border:1px solid #999;">Registration Fee</td><td style="padding:8px;border:1px solid #999;">$150.00</td></tr>
+      <tr style="font-weight:700;background:#F7F2E8;"><td style="padding:8px;border:1px solid #999;">Total for the year</td><td style="padding:8px;border:1px solid #999;">$__________</td></tr>
+    </table>
+    <div style="font-weight:700;margin-bottom:8px;" dir="rtl">אופני התשלום:</div>
+    <div style="margin-bottom:6px;">☐ Ten Monthly Payments, post-dated Sep. 1 ${escapeHtml(String(STATE.years.find(y=>y===STATE.currentYear)||'').split('-')[0]||'')} thru June ${escapeHtml(String(STATE.currentYear).split('-')[1]||'')}</div>
+    <div style="margin-bottom:6px;">☐ Charge my Credit Card every month: ☐ 10 Months</div>
+    <div style="margin-bottom:14px;">☐ Visa &nbsp; ☐ MasterCard &nbsp; Card #: ______________________ &nbsp; Exp: ________ &nbsp; Security Code: ________</div>
+    <div dir="rtl" style="font-size:10pt;margin-bottom:14px;line-height:1.5;">
+      <strong style="text-decoration:underline;">פאר די אלע וואס האבן וואוטשערס:</strong> מיט די חתימה זענען מיר מקבל זיך אונטערצונעמען, אז אויב דער פראגראם ווערט זיך אויפהערן, אדער איר ווערט פארלירן אייער eligibility, האט איר צו אונז התחייבות צו צאלן די איבערגעבליבענע וואס מען פארלאנגט פון אונטער עלטערן שיחי'
+    </div>
+    <div style="display:flex;gap:40px;margin-top:24px;">
+      <div style="flex:1;">Signature: _________________________</div>
+      <div style="flex:1;">Date: _________________________</div>
+    </div>`;
+  const win = window.open('', '_blank');
+  win.document.write(letterheadHtml(body, `Tuition Contract — ${familyDisplayName}`, familyDisplayName));
+  win.document.close();
+}
 function printGoals(studentId){
   const student = byId(STATE.students, studentId);
   const goals = clinicalGoals(student);
@@ -6062,7 +6215,7 @@ function commitCsvImport(kind){
         phone:o.phone||'', address:o.address||'', city:o.city||'', state:o.state||'', zip:o.zip||'',
       };
       if(existing){ Object.assign(existing, fields); updated++; }
-      else { STATE.staff.push({id:uid('st'), ...fields, access:{type:'assigned',studentIds:[]}}); created++; }
+      else { STATE.staff.push({id:uid('st'), ...fields, access:{type:'assigned',studentIds:[]}, branchAccess:['all']}); created++; }
     });
     window.__lastImportSummary = `${created} new, ${updated} updated (matched by email)`;
   }
@@ -6235,6 +6388,9 @@ function openStaffModal(id){
       <div class="form-row"><label>Email</label><input id="mEmail" value="${escapeHtml(s.email||'')}"></div>
     </div>
     <div class="small" style="margin:-6px 0 12px;">Typing a brand-new role here creates it — set its permissions afterward in Settings → Roles &amp; Permissions.</div>
+    ${STATE.branches.length>1 ? `<div class="form-row"><label>Branch access <span class="small">(which branch's students, staff, and data this person can see)</span></label>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;">${STATE.branches.map(b=>`<label style="font-weight:400;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="mBranchAccessCb" value="${b.id}" ${((s.branchAccess||['all']).includes('all')||(s.branchAccess||[]).includes(b.id))?'checked':''}> ${escapeHtml(b.name)}</label>`).join('')}</div>
+    </div>` : ''}
     <div class="form-row"><label>Supervisor <span class="small">(optional — CC'd on this person's weekly compliance report email; not used for anything else)</span></label>
       <select id="mSupervisor"><option value="">— none —</option>${STATE.staff.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${s.supervisorId===x.id?'selected':''}>${escapeHtml(x.name)} — ${escapeHtml(x.role)}${x.active===false?' (inactive)':''}</option>`).join('')}</select>
     </div>
@@ -6530,6 +6686,13 @@ async function saveStaff(id){
   let s = wasNew ? {id} : STATE.staff[existingIdx];
   if(wasNew) STATE.staff.push(s);
   s.name=name; s.nickname=document.getElementById('mNickname').value.trim(); s.role=role; s.email=email; s.access={type:accType, studentIds:accStudentIds};
+  const branchCbs = document.querySelectorAll('.mBranchAccessCb');
+  if(branchCbs.length){
+    const checked = [...branchCbs].filter(cb=>cb.checked).map(cb=>cb.value);
+    s.branchAccess = checked.length===STATE.branches.length ? ['all'] : checked;
+  } else if(!s.branchAccess){
+    s.branchAccess = ['all']; // the checkbox group is hidden for single-branch schools — default new staff to full access rather than leaving this unset
+  }
   s.supervisorId = document.getElementById('mSupervisor').value || null;
   s.phone=document.getElementById('mPhone').value.trim();
   s.address=document.getElementById('mAddress').value.trim();
@@ -6619,6 +6782,7 @@ function openClassModal(id){
     <h3>${id?'Edit':'Add'} class</h3>
     <div class="form-cols"><div class="form-row"><label>Class name</label><input id="mName" value="${escapeHtml(c.name)}"></div>
     <div class="form-row"><label>Room</label><input id="mRoom" value="${escapeHtml(c.room||'')}"></div></div>
+    ${STATE.branches.length>1 ? `<div class="form-row"><label>Branch</label><select id="mBranch">${STATE.branches.map(b=>`<option value="${b.id}" ${(c.branchId||STATE.branches[0].id)===b.id?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}</select></div>` : ''}
     <div class="form-row"><label>Lead teacher</label><select id="mTeacher"><option value="">— none —</option>${pickableStaff([c.teacherId]).map(s=>`<option value="${s.id}" ${s.id===c.teacherId?'selected':''}>${s.name}${s.role?' — '+escapeHtml(s.role):''}${s.active===false?' (inactive)':''}</option>`).join('')}</select></div>
     <div class="form-row"><label>Assigned staff</label>
       <div class="search-box"><input class="tinput" placeholder="Search staff by name or department..." oninput="filterCheckboxList(this,'classStaffChecklist')"></div>
@@ -6660,6 +6824,8 @@ function saveClass(id){
   const isNew = !byId(STATE.classes,id);
   let c = byId(STATE.classes,id); if(!c){ c={id, year:STATE.currentYear}; STATE.classes.push(c); }
   c.name=name; c.room=room; c.teacherId=teacherId; c.staffIds=staffIds;
+  const classBranchEl = document.getElementById('mBranch');
+  c.branchId = classBranchEl ? classBranchEl.value : (c.branchId || STATE.branches[0].id);
   c.maxAtTherapy = parseInt(document.getElementById('mMaxAtTherapy').value)||0;
   c.mandateOverrides = c.mandateOverrides || {};
   ['OT','PT','SLP'].forEach(d=>{
@@ -7220,7 +7386,8 @@ function openStudentModal(id){
       </div>
     </div>
     <div class="form-row"><label>Allergies <span class="small muted">(shown prominently on the emergency profile print)</span></label><input id="mAllergies" placeholder="e.g. Peanuts, penicillin — or leave blank for none known" value="${escapeHtml(s.allergies||'')}"></div>
-    <div class="form-row"><label>Class</label><select id="mClass"><option value="">— none —</option>${cls.map(c=>`<option value="${c.id}" ${c.id===s.classId?'selected':''}>${c.name}</option>`).join('')}</select></div>
+    ${STATE.branches.length>1 ? `<div class="form-row"><label>Branch</label><select id="mBranch">${STATE.branches.map(b=>`<option value="${b.id}" ${(s.branchId||STATE.branches[0].id)===b.id?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}</select></div>` : ''}
+    <div class="form-row"><label>Class</label><select id="mClass"><option value="">— none —</option>${cls.map(c=>`<option value="${c.id}" ${c.id===s.classId?'selected':''}>${c.name}${STATE.branches.length>1?` (${escapeHtml((byId(STATE.branches,recordBranchId(c))||{}).name||'')})`:''}</option>`).join('')}</select></div>
     <div class="form-row">
       <label>Scheduling limits <span class="small">(blank = use the school-wide setting from Settings)</span></label>
       <label style="font-weight:400;display:flex;align-items:center;gap:6px;margin-bottom:6px;"><input type="checkbox" id="mSchedRuleOverride" ${s.schedulingRules?'checked':''} onchange="document.getElementById('mSchedRuleWrap').style.display=this.checked?'flex':'none';"> Give this student different scheduling limits</label>
@@ -7368,6 +7535,8 @@ function saveStudent(id){
   s.yiddishLastName = document.getElementById('mYiddishLastName').value.trim();
   { const diagSel = document.getElementById('mDiagSelect').value; s.diagnosis = diagSel==='Other' ? document.getElementById('mDiagOther').value.trim() : diagSel; }
   s.allergies = document.getElementById('mAllergies').value.trim();
+  const branchEl = document.getElementById('mBranch');
+  s.branchId = branchEl ? branchEl.value : (s.branchId || STATE.branches[0].id);
   s.classId=document.getElementById('mClass').value;
   s.therapists = {OT:document.getElementById('mOT').value, PT:document.getElementById('mPT').value, SLP:document.getElementById('mSLP').value};
   s.mandates = {};
@@ -12831,6 +13000,16 @@ function renderPrintCenter(){
   // needs the usual scope select.
   const showGenericScope = !(isGroupActivities && VIEW.pcScheduleBy!=='class');
   return `
+  <div class="card" style="max-width:620px;margin-bottom:18px;">
+    <h3>📝 Registration &amp; Tuition</h3>
+    <div class="muted small" style="margin-bottom:12px;">One tuition contract per family, with a row for every child rather than a fixed two-child form. Families are grouped by matching parent names and address — a student with nothing on file yet prints as its own single-child family.</div>
+    ${familiesOfYear().length ? `<div style="max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;">
+      ${familiesOfYear().map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);">
+        <div><strong>${escapeHtml(f.lastName||'(no last name on file)')}</strong> <span class="muted small">— ${f.students.length} ${f.students.length===1?'child':'children'} (${f.students.map(s=>escapeHtml(s.name)).join(', ')})</span></div>
+        <button class="btn-ghost btn btn-sm" onclick="printTuitionContract('${f.students[0].id}')">🖨 Tuition Contract</button>
+      </div>`).join('')}
+    </div>` : `<div class="muted small">No students in ${escapeHtml(STATE.currentYear)} yet.</div>`}
+  </div>
   <div class="card" style="max-width:620px;">
     <h3>Print &amp; Document Center</h3>
     <div class="muted small" style="margin-bottom:14px;">Print records across one or many ${scopeLabel.toLowerCase()} at once${(isSchedule||isFullSchedule||isGroupActivities||isRoster)?'':', filtered by type and date'} — only includes records you already have access to.</div>
@@ -16266,6 +16445,7 @@ function renderSettings(){
   if(canAbsencePolicy) sections.push({key:'absence', label:'Staff Absence Allowance'});
   if(canLobby) sections.push({key:'lobby', label:'Lobby Display'});
   if(isAdmin && BACKEND_MODE) sections.push({key:'testdata', label:'Test Mode Data'});
+  if(isAdmin) sections.push({key:'branches', label:'Branches'});
   if(isAdmin) sections.push({key:'danger', label:'Danger Zone'});
 
   if(!sections.length){
@@ -16458,6 +16638,13 @@ function renderSettings(){
       </div>
       <div class="small muted" style="margin-bottom:12px;">Worth knowing: Test Mode applies each person's own real role and permissions (see the banner shown there), so anyone using it only ever sees what they're already allowed to see in the real system — the same visibility rules apply either way. That said, treat anything shown during a training session as real, even though it's labeled Test Mode; it's a live copy of actual student and staff information, not made-up data.</div>
       <button class="btn" id="copyTestDataBtn" onclick="copyRealDataToTestMode()">📋 Copy real data into Test Mode now</button>
+    </div>`,
+
+    branches: `<div class="card">
+      <h3>🏫 Branches</h3>
+      <div class="muted small" style="margin-bottom:12px;">For one school operating as two (or more) separate locations under different names — same login system and shared staff directory, but each branch gets its own name, logo, and address on its own printed documents. Give a staff member's own account access to just the branch(es) they should see, in their profile on the Staff tab. A school with only one branch can ignore this entirely — nothing changes until a second branch actually exists.</div>
+      ${STATE.branches.map(b=>branchEditorHtml(b)).join('<hr style="margin:16px 0;border:none;border-top:1px solid var(--line);">')}
+      <div style="margin-top:16px;"><button class="btn btn-sm" onclick="addBranch()">+ Add a branch</button></div>
     </div>`,
 
     danger: `<div class="card" style="border:1px solid var(--rose);">
@@ -16669,6 +16856,98 @@ async function clearYearBrandingLogo(year){
   if(STATE.brandingHistory[year]) STATE.brandingHistory[year].hasLogo = false;
   delete window.__yearLogoCache[year];
   saveState(); renderContent(); toast('Logo override removed');
+}
+window.__branchLogoCache = window.__branchLogoCache || {};
+async function prefetchBranchLogo(branchId){
+  const b = byId(STATE.branches, branchId);
+  if(!b || !b.hasLogo || window.__branchLogoCache[branchId]) return;
+  const res = await backendGetLogo(null, branchId);
+  if(res.ok && res.body && res.body.logo) window.__branchLogoCache[branchId] = res.body.logo;
+}
+// One collapsible-ish editor block per branch, same shape as the year-branding editor above —
+// name/assumedName/address/phone are plain STATE fields (small, no reason to store them
+// separately), the logo is fetched on demand via prefetchBranchLogo the same way a year's
+// branding-history logo is, rather than embedding potentially-large image data directly in the
+// main state blob that re-uploads on every single save.
+function branchEditorHtml(b){
+  if(b.hasLogo && !window.__branchLogoCache[b.id]) prefetchBranchLogo(b.id).then(()=>renderContent());
+  const cachedLogo = window.__branchLogoCache[b.id];
+  const canDelete = STATE.branches.length>1;
+  return `<div style="margin-bottom:4px;">
+    <div class="form-cols">
+      <div class="form-row"><label class="small">Branch name</label><input class="tinput" id="branchName_${b.id}" value="${escapeHtml(b.name||'')}"></div>
+      <div class="form-row"><label class="small">Assumed name (for letterhead, if different)</label><input class="tinput" id="branchAssumed_${b.id}" placeholder="${escapeHtml(b.name||'')}" value="${escapeHtml(b.assumedName||'')}"></div>
+    </div>
+    <div class="form-cols">
+      <div class="form-row"><label class="small">Address</label><input class="tinput" id="branchAddress_${b.id}" value="${escapeHtml(b.address||'')}"></div>
+      <div class="form-row"><label class="small">Phone</label><input class="tinput" id="branchPhone_${b.id}" value="${escapeHtml(b.phone||'')}"></div>
+    </div>
+    <div class="form-row"><label class="small">Logo</label>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <img src="${cachedLogo || (b.hasLogo?LOGO_DATA_URI:(STATE.schoolLogoDataUrl||LOGO_DATA_URI))}" style="height:40px;max-width:150px;object-fit:contain;border:1px solid var(--line);border-radius:6px;background:#fff;padding:4px;">
+        <input type="file" id="branchLogoFile_${b.id}" accept="image/png,image/jpeg" style="max-width:180px;">
+        ${b.hasLogo?`<button class="btn-ghost btn btn-sm" onclick="removeBranchLogo('${b.id}')">Remove logo</button>`:''}
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+      <button class="btn btn-sm" onclick="saveBranchFields('${b.id}')">Save "${escapeHtml(b.name||'this branch')}"</button>
+      ${canDelete?`<button class="btn-ghost btn btn-sm" style="color:var(--rose);" onclick="deleteBranch('${b.id}')">Delete this branch</button>`:`<span class="small muted" style="align-self:center;">A school always needs at least one branch.</span>`}
+    </div>
+  </div>`;
+}
+function addBranch(){
+  const id = uid('branch');
+  STATE.branches.push({ id, name:'New branch', assumedName:'', hasLogo:false, address:'', phone:'' });
+  saveState(); renderContent(); toast('Branch added — fill in its details below');
+}
+async function saveBranchFields(id){
+  const b = byId(STATE.branches, id); if(!b) return;
+  b.name = (document.getElementById('branchName_'+id).value||'').trim() || b.name;
+  b.assumedName = (document.getElementById('branchAssumed_'+id).value||'').trim();
+  b.address = (document.getElementById('branchAddress_'+id).value||'').trim();
+  b.phone = (document.getElementById('branchPhone_'+id).value||'').trim();
+  const finish = ()=>{ saveState(); renderContent(); toast('Branch saved'); };
+  const fileInput = document.getElementById('branchLogoFile_'+id);
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  if(file){
+    if(file.size > 500*1024){ toast('Please use an image under 500KB'); return; }
+    const reader = new FileReader();
+    reader.onload = async ()=>{
+      const res = await backendSaveLogo(reader.result, null, id);
+      if(!res.ok){ toast((res.body&&res.body.error)||'Could not save that logo'); return; }
+      b.hasLogo = true; window.__branchLogoCache[id] = reader.result;
+      finish();
+    };
+    reader.onerror = ()=>toast('Could not read that image');
+    reader.readAsDataURL(file);
+  } else {
+    finish();
+  }
+}
+async function removeBranchLogo(id){
+  const res = await backendSaveLogo(null, null, id);
+  if(!res.ok){ toast((res.body&&res.body.error)||'Could not remove that logo'); return; }
+  const b = byId(STATE.branches, id); if(b) b.hasLogo = false;
+  delete window.__branchLogoCache[id];
+  saveState(); renderContent(); toast('Logo removed');
+}
+function deleteBranch(id){
+  if(STATE.branches.length<=1){ toast('A school always needs at least one branch'); return; }
+  const b = byId(STATE.branches, id); if(!b) return;
+  const studentCount = STATE.students.filter(s=>recordBranchId(s)===id).length;
+  const staffCount = STATE.staff.filter(s=>(s.branchAccess||[]).includes(id)).length;
+  const usageNote = (studentCount||staffCount) ? ` This branch currently has ${studentCount} student(s) and ${staffCount} staff member(s) linked to it — they will move to "${escapeHtml(STATE.branches.find(x=>x.id!==id).name)}" instead, they will NOT be deleted.` : '';
+  showDangerConfirm(`Delete the branch "${escapeHtml(b.name)}"?${usageNote} This can't be undone.`, async ()=>{
+    const fallbackId = STATE.branches.find(x=>x.id!==id).id;
+    STATE.students.forEach(s=>{ if(s.branchId===id) s.branchId = fallbackId; });
+    STATE.classes.forEach(c=>{ if(c.branchId===id) c.branchId = fallbackId; });
+    STATE.staff.forEach(s=>{ if(s.branchAccess && s.branchAccess.includes(id)){ s.branchAccess = s.branchAccess.filter(x=>x!==id); if(!s.branchAccess.length) s.branchAccess = [fallbackId]; } });
+    if(b.hasLogo) await backendSaveLogo(null, null, id);
+    STATE.branches = STATE.branches.filter(x=>x.id!==id);
+    if(VIEW.currentBranch===id) VIEW.currentBranch = 'all';
+    delete window.__branchLogoCache[id];
+    saveState(); renderContent(); toast('Branch deleted');
+  }, 'Delete branch');
 }
 async function saveSchoolSettings(){
   STATE.schoolName = document.getElementById('setSchool').value.trim() || STATE.schoolName;
@@ -24082,7 +24361,7 @@ async function convertHireAppToStaffWithRole(id, role){
   STATE.staff.push({
     id:newId, name:a.name, firstName:nameParts[0]||'', role, email:a.personalEmail||'',
     phone:a.phone||'', address:a.address||'', city:a.city||'', state:a.state||'', zip:a.zip||'',
-    access:{type:'assigned',studentIds:[]},
+    access:{type:'assigned',studentIds:[]}, branchAccess:['all'],
   });
   a.status='converted'; a.convertedStaffId=newId;
   STATE.staffDocuments = STATE.staffDocuments || [];

@@ -756,9 +756,17 @@ exports.handler = async (event) => {
   // for historical branding on printed documents from a year before the school's current name/
   // logo — see letterheadHtml on the frontend. No year param = the current/default logo,
   // exactly as before this was added, so nothing about the existing behavior changes.
+  // Optional ?year=... lets this same endpoint store a separate logo per academic year, used
+  // for historical branding on printed documents from a year before the school's current name/
+  // logo — see letterheadHtml on the frontend. Optional ?branch=... does the same for a specific
+  // branch's own logo (see multi-branch support) — the two are mutually exclusive in practice
+  // (a school either has branches or year-specific branding history, rarely both at once), so
+  // whichever is present wins rather than trying to combine them into one compound key. No
+  // param at all = the current/default logo, exactly as before either of these was added.
   if (resource === 'logo') {
     const year = event.queryStringParameters && event.queryStringParameters.year;
-    const storeKey = year ? `schoolLogo:${year}` : 'schoolLogo';
+    const branch = event.queryStringParameters && event.queryStringParameters.branch;
+    const storeKey = branch ? `branchLogo:${branch}` : (year ? `schoolLogo:${year}` : 'schoolLogo');
     if (event.httpMethod === 'GET') {
       const logo = await store.get(storeKey, { type: 'text' });
       return json(200, { logo: logo || null });
@@ -766,15 +774,23 @@ exports.handler = async (event) => {
     if (event.httpMethod === 'POST' || event.httpMethod === 'PUT') {
       const state = await loadFullState(store);
       const role = state ? roleOf(state, payload.staffId) : null;
-      if (state && !state.__bootstrapAdmin && role && !hasPerm(state, role, 'editSchoolInfo')) {
-        return json(403, { error: 'You do not have permission to change the letterhead logo' });
+      const bootstrapping = !!(state && state.__bootstrapAdmin);
+      // Branch logos are Admin-only regardless of the editSchoolInfo permission some other role
+      // might hold — a school's overall letterhead and one specific branch's letterhead are
+      // different enough in blast radius (one branch's own document, vs. every printed page
+      // school-wide) that it's worth a stricter, simpler rule rather than reusing editSchoolInfo.
+      const blocked = branch
+        ? !(bootstrapping || role === 'Admin')
+        : !!(!bootstrapping && role && !hasPerm(state, role, 'editSchoolInfo'));
+      if (blocked) {
+        return json(403, { error: branch ? 'Only an Admin can change a branch logo' : 'You do not have permission to change the letterhead logo' });
       }
       let body;
       try { body = JSON.parse(event.body || '{}'); } catch (e) { return json(400, { error: 'Invalid JSON body' }); }
       if (typeof body.logo !== 'string' && body.logo !== null) return json(400, { error: 'Expected { logo: "data:..." }' });
       if (body.logo && body.logo.length > 2_000_000) return json(413, { error: 'That image is too large — please use a smaller file.' });
       if (body.logo) await store.set(storeKey, body.logo); else await store.delete(storeKey);
-      await appendAudit(event, { type: year ? 'year_logo_changed' : 'logo_changed', staffId: payload.staffId, email: payload.email, detail: year || undefined });
+      await appendAudit(event, { type: branch ? 'branch_logo_changed' : (year ? 'year_logo_changed' : 'logo_changed'), staffId: payload.staffId, email: payload.email, detail: branch || year || undefined });
       return json(200, { ok: true });
     }
     return json(405, { error: 'Method not allowed' });
