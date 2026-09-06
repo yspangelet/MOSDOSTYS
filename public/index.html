@@ -2663,10 +2663,11 @@ function showStudentQuickView(id){
   const s = byId(STATE.students, id); if(!s) return;
   const mstatus = mandateStatus(s);
   const activeGoals = clinicalGoals(s).filter(g=>g.status==='Active');
+  const showClinical = STATE.dashboardComplianceWidgets.mandate!==false;
   showModal(`
     <h3>${escapeHtml(s.name)}</h3>
-    <div class="muted small" style="margin-bottom:12px;">${className(s.classId)} · DOB ${s.dob||'—'} · ${escapeHtml(s.diagnosis||'')}</div>
-    <div class="form-row"><label>Therapists</label>
+    <div class="muted small" style="margin-bottom:12px;">${className(s.classId)} · DOB ${s.dob||'—'}${STATE.studentFieldToggles.diagnosis!==false && s.diagnosis? ` · ${escapeHtml(s.diagnosis)}` : ''}</div>
+    ${showClinical? `<div class="form-row"><label>Therapists</label>
       <div class="small">OT: ${s.therapists.OT? `<span class="link" onclick="closeModal();setTimeout(()=>showQuickView('staff','${s.therapists.OT}'),50)">${escapeHtml(staffName(s.therapists.OT))}</span>`:'—'}
       &nbsp;·&nbsp; PT: ${s.therapists.PT? `<span class="link" onclick="closeModal();setTimeout(()=>showQuickView('staff','${s.therapists.PT}'),50)">${escapeHtml(staffName(s.therapists.PT))}</span>`:'—'}
       &nbsp;·&nbsp; SLP: ${s.therapists.SLP? `<span class="link" onclick="closeModal();setTimeout(()=>showQuickView('staff','${s.therapists.SLP}'),50)">${escapeHtml(staffName(s.therapists.SLP))}</span>`:'—'}</div>
@@ -2676,7 +2677,7 @@ function showStudentQuickView(id){
     </div>
     <div class="form-row"><label>Active clinical goals</label>
       ${activeGoals.length? activeGoals.map(g=>`<div class="small" style="margin-bottom:2px;"><span class="pill pill-teal">${g.discipline}</span> ${escapeHtml(g.text)}</div>`).join('') : '<div class="muted small">None on file.</div>'}
-    </div>
+    </div>` : ''}
     <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Close</button><button class="btn" onclick="closeModal();VIEW.tab='students';VIEW.profileStudent='${id}';render();">Open full profile</button></div>
   `);
 }
@@ -5526,70 +5527,76 @@ function registrationPacketBodyHtml(family){
   const gp = first.grandparents||{}; const gpP = gp.paternal||{}, gpM = gp.maternal||{};
   const letterBody = registrationLetterHtml();
   const medicalComment = [med.comment, ...family.students.map(s=>s.allergies)].filter(Boolean).join('; ');
-  const studentRowsHtml = family.students.map(s=>`
+  // td/th padding is deliberately tight (3px) and h3 margins collapsed to keep the whole
+  // Family/Father/Mother/Student/Emergency/Medical/Grandparents form on ONE printed page —
+  // this is meant to be handed to a family as a single sheet, not spill onto a second page.
+  const td = 'padding:3px 6px;border:1px solid #999;';
+  const studentRowsHtml = family.students.map(s=>{
+    const yiddish = s.yiddishName ? ` (${escapeHtml([s.yiddishName, s.yiddishLastName].filter(Boolean).join(' '))})` : '';
+    return `
     <tr>
-      <td style="padding:6px;border:1px solid #999;">${escapeHtml(s.name)}</td>
-      <td style="padding:6px;border:1px solid #999;">${escapeHtml(className(s.classId))}</td>
-      <td style="padding:6px;border:1px solid #999;">${s.dob?fmtDate(s.dob):''}</td>
-    </tr>`).join('');
+      <td style="${td}">${escapeHtml(s.name)}${yiddish}</td>
+      <td style="${td}">${escapeHtml(s.studentIdNumber||'')}</td>
+      <td style="${td}">${escapeHtml(className(s.classId))}</td>
+      <td style="${td}">${s.dob?fmtDate(s.dob):''}${s.hebrewDob?` <span dir="rtl">(${escapeHtml(s.hebrewDob)})</span>`:''}</td>
+    </tr>`;}).join('');
   return `
     <div dir="auto" style="margin-bottom:24px;line-height:1.6;">${letterBody}</div>
-    <div style="page-break-before:always;">
+    <div style="page-break-before:always;font-size:12px;">
       ${letterheadHeaderHtml()}
-      <h2 style="text-align:center;margin-top:0;">PARENT / STUDENT INFORMATION</h2>
-      <h3 style="margin-bottom:6px;">Family Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>נאמען / Name:</strong> ${escapeHtml(familyDisplayName)}</td>
-            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Address:</strong> ${escapeHtml(first.address||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Phone (Home):</strong> ${escapeHtml(first.homePhone||'')}</td></tr>
+      <h2 style="text-align:center;margin:0 0 8px;">PARENT / STUDENT INFORMATION</h2>
+      <h3 style="margin:0 0 3px;">Family Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <tr><td style="${td}width:33%;"><strong>נאמען / Name:</strong> ${escapeHtml(familyDisplayName)}</td>
+            <td style="${td}width:34%;"><strong>Address:</strong> ${escapeHtml(first.address||'')}</td>
+            <td style="${td}width:33%;"><strong>Phone (Home):</strong> ${escapeHtml(first.homePhone||'')}</td></tr>
       </table>
-      <h3 style="margin-bottom:6px;">Father's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>ערשטע נאמען / First Name:</strong> ${escapeHtml(fa.name||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Cell Phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Workplace / Kolel:</strong> ${escapeHtml(fa.workplace||'')}</td></tr>
-        <tr><td colspan="3" style="padding:6px;border:1px solid #999;"><strong>Email:</strong> ${escapeHtml(fa.email||'')}</td></tr>
+      <h3 style="margin:0 0 3px;">Father's Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${escapeHtml(fa.name||'')}</td>
+            <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}</td>
+            <td style="${td}width:25%;"><strong>Workplace / Kolel:</strong> ${escapeHtml(fa.workplace||'')}</td>
+            <td style="${td}width:25%;"><strong>Email:</strong> ${escapeHtml(fa.email||'')}</td></tr>
       </table>
-      <h3 style="margin-bottom:6px;">Mother's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:33%;"><strong>ערשטע נאמען / First Name:</strong> ${escapeHtml(mo.name||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:34%;"><strong>Cell Phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Workplace:</strong> ${escapeHtml(mo.workplace||'')}</td></tr>
-        <tr><td style="padding:6px;border:1px solid #999;"><strong>Maiden Name:</strong> ${escapeHtml(mo.maidenName||'')}</td>
-            <td colspan="2" style="padding:6px;border:1px solid #999;"><strong>Email:</strong> ${escapeHtml(mo.email||'')}</td></tr>
+      <h3 style="margin:0 0 3px;">Mother's Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${escapeHtml(mo.name||'')}${mo.maidenName?` <span class="small muted">(née ${escapeHtml(mo.maidenName)})</span>`:''}</td>
+            <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}</td>
+            <td style="${td}width:25%;"><strong>Workplace:</strong> ${escapeHtml(mo.workplace||'')}</td>
+            <td style="${td}width:25%;"><strong>Email:</strong> ${escapeHtml(mo.email||'')}</td></tr>
       </table>
-      <h3 style="margin-bottom:6px;">תלמיד / Student(s) Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <thead><tr style="background:#F1E3EC;"><th style="padding:6px;border:1px solid #999;">ערשטע נאמען / Legal Name</th><th style="padding:6px;border:1px solid #999;">כתה / Class</th><th style="padding:6px;border:1px solid #999;">DOB / יום הולדת</th></tr></thead>
+      <h3 style="margin:0 0 3px;">תלמיד / Student(s) Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <thead><tr style="background:#F1E3EC;"><th style="${td}">ערשטע נאמען / Legal Name</th><th style="${td}">Student ID</th><th style="${td}">כתה / Class</th><th style="${td}">DOB / יום הולדת</th></tr></thead>
         <tbody>${studentRowsHtml}</tbody>
       </table>
-      <h3 style="margin-bottom:6px;">Emergency Contact Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <thead><tr style="background:#F1E3EC;"><th style="padding:6px;border:1px solid #999;">Name</th><th style="padding:6px;border:1px solid #999;">Relationship</th><th style="padding:6px;border:1px solid #999;">Phone</th></tr></thead>
+      <h3 style="margin:0 0 3px;">Emergency Contact Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <thead><tr style="background:#F1E3EC;"><th style="${td}">Name</th><th style="${td}">Relationship</th><th style="${td}">Phone</th></tr></thead>
         <tbody>
-        <tr><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec1.name||'')||'&nbsp;'}</td><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec1.relationship||'')||'&nbsp;'}</td><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec1.phone||'')||'&nbsp;'}</td></tr>
-        <tr><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec2.name||'')||'&nbsp;'}</td><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec2.relationship||'')||'&nbsp;'}</td><td style="padding:10px;border:1px solid #999;">${escapeHtml(ec2.phone||'')||'&nbsp;'}</td></tr>
+        <tr><td style="${td}">${escapeHtml(ec1.name||'')||'&nbsp;'}</td><td style="${td}">${escapeHtml(ec1.relationship||'')||'&nbsp;'}</td><td style="${td}">${escapeHtml(ec1.phone||'')||'&nbsp;'}</td></tr>
+        <tr><td style="${td}">${escapeHtml(ec2.name||'')||'&nbsp;'}</td><td style="${td}">${escapeHtml(ec2.relationship||'')||'&nbsp;'}</td><td style="${td}">${escapeHtml(ec2.phone||'')||'&nbsp;'}</td></tr>
         </tbody>
       </table>
-      <h3 style="margin-bottom:6px;">Medical Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:34%;"><strong>Family Doctor:</strong> ${escapeHtml(med.doctorName||'')||'&nbsp;'}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Address:</strong> ${escapeHtml(med.doctorAddress||'')||'&nbsp;'}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Phone:</strong> ${escapeHtml(med.doctorPhone||'')||'&nbsp;'}</td></tr>
-        <tr><td colspan="3" style="padding:6px;border:1px solid #999;"><strong>Medical Comment / Allergies:</strong> ${escapeHtml(medicalComment)||'&nbsp;'}</td></tr>
+      <h3 style="margin:0 0 3px;">Medical Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <tr><td style="${td}width:34%;"><strong>Family Doctor:</strong> ${escapeHtml(med.doctorName||'')||'&nbsp;'}</td>
+            <td style="${td}width:33%;"><strong>Address:</strong> ${escapeHtml(med.doctorAddress||'')||'&nbsp;'}</td>
+            <td style="${td}width:33%;"><strong>Phone:</strong> ${escapeHtml(med.doctorPhone||'')||'&nbsp;'}</td></tr>
+        <tr><td colspan="3" style="${td}"><strong>Medical Comment / Allergies:</strong> ${escapeHtml(medicalComment)||'&nbsp;'}</td></tr>
       </table>
-      <h3 style="margin-bottom:6px;">Grandparent's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
-        <tr><td style="padding:6px;border:1px solid #999;width:34%;"><strong>Name:</strong> ${escapeHtml(gpP.name||'')||'&nbsp;'} <span class="small muted">(Paternal)</span></td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Address:</strong> ${escapeHtml(gpP.address||'')||'&nbsp;'}</td>
-            <td style="padding:6px;border:1px solid #999;width:33%;"><strong>Phone:</strong> ${escapeHtml(gpP.phone||'')||'&nbsp;'}</td></tr>
-        <tr><td style="padding:6px;border:1px solid #999;"><strong>Name:</strong> ${escapeHtml(gpM.name||'')||'&nbsp;'} <span class="small muted">(Maternal)</span></td>
-            <td style="padding:6px;border:1px solid #999;"><strong>Address:</strong> ${escapeHtml(gpM.address||'')||'&nbsp;'}</td>
-            <td style="padding:6px;border:1px solid #999;"><strong>Phone:</strong> ${escapeHtml(gpM.phone||'')||'&nbsp;'}</td></tr>
+      <h3 style="margin:0 0 3px;">Grandparent's Information</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <tr><td style="${td}width:34%;"><strong>Name:</strong> ${escapeHtml(gpP.name||'')||'&nbsp;'} <span class="small muted">(Paternal)</span></td>
+            <td style="${td}width:33%;"><strong>Address:</strong> ${escapeHtml(gpP.address||'')||'&nbsp;'}</td>
+            <td style="${td}width:33%;"><strong>Phone:</strong> ${escapeHtml(gpP.phone||'')||'&nbsp;'}</td></tr>
+        <tr><td style="${td}"><strong>Name:</strong> ${escapeHtml(gpM.name||'')||'&nbsp;'} <span class="small muted">(Maternal)</span></td>
+            <td style="${td}"><strong>Address:</strong> ${escapeHtml(gpM.address||'')||'&nbsp;'}</td>
+            <td style="${td}"><strong>Phone:</strong> ${escapeHtml(gpM.phone||'')||'&nbsp;'}</td></tr>
       </table>
-      <h3 style="margin-bottom:6px;">Medical Consent</h3>
-      <div style="margin-bottom:8px;">I hereby authorize ${escapeHtml(STATE.schoolName)} as our agent to consent to any emergency diagnostic procedure, medical care, or hospital as deemed necessary for the student(s) listed above.</div>
-      <div style="margin-bottom:16px;">Child may be given OTC pain relief medication: ${first.otcMedicationAllowed===true?'☒':'☐'} Yes &nbsp; ${first.otcMedicationAllowed===false?'☒':'☐'} No</div>
+      <h3 style="margin:0 0 3px;">Medical Consent</h3>
+      <div style="margin-bottom:4px;">I hereby authorize ${escapeHtml(STATE.schoolName)} as our agent to consent to any emergency diagnostic procedure, medical care, or hospital as deemed necessary for the student(s) listed above.</div>
+      <div style="margin-bottom:10px;">Child may be given OTC pain relief medication: ${first.otcMedicationAllowed===true?'☒':'☐'} Yes &nbsp; ${first.otcMedicationAllowed===false?'☒':'☐'} No</div>
       <div style="display:flex;gap:40px;">
         <div style="flex:1;">Parent Signature: _________________________</div>
         <div style="flex:1;">Date: _________________________</div>
@@ -5603,7 +5610,7 @@ function printRegistrationLetter(anyStudentIdInFamily){
   if(!family){ toast('Could not find that family'); return; }
   const familyDisplayName = registrationFamilyDisplayName(family.students[0]);
   const win = window.open('', '_blank');
-  win.document.write(letterheadHtml(registrationPacketBodyHtml(family), `Registration — ${familyDisplayName}`, familyDisplayName));
+  win.document.write(letterheadHtml(registrationPacketBodyHtml(family), `Registration — ${familyDisplayName}`, familyDisplayName, true));
   win.document.close();
 }
 // Combined Registration + Tuition Contract as ONE print job — same two documents as the separate
@@ -5624,7 +5631,7 @@ function printAllRegistrationsAndContracts(){
   }).join('');
   if(missingContract) toast(`Tuition Contract skipped for ${missingContract} famil${missingContract===1?'y':'ies'} — set up Tuition Contract Pricing in Settings to include it for everyone`);
   const win = window.open('', '_blank');
-  win.document.write(letterheadHtml(combined, `Registration & Tuition Contracts — ${STATE.currentYear} (${families.length} families)`));
+  win.document.write(letterheadHtml(combined, `Registration & Tuition Contracts — ${STATE.currentYear} (${families.length} families)`, null, true));
   win.document.close();
 }
 function printRegistrationAndContract(anyStudentIdInFamily){
@@ -5637,7 +5644,7 @@ function printRegistrationAndContract(anyStudentIdInFamily){
   const combined = registrationPacketBodyHtml(family) + (contractBody ? `<div style="page-break-before:always;">${letterheadHeaderHtml()}${contractBody}</div>` : '');
   if(!contractBody) toast('Printing Registration only — set up Tuition Contract Pricing in Settings to include the contract too');
   const win = window.open('', '_blank');
-  win.document.write(letterheadHtml(combined, `Registration & Tuition Contract — ${familyDisplayName}`, familyDisplayName));
+  win.document.write(letterheadHtml(combined, `Registration & Tuition Contract — ${familyDisplayName}`, familyDisplayName, true));
   win.document.close();
 }
 // Plain-text version for email — same pattern as tuitionStatementEmailText/emailTuitionStatement:
@@ -14364,7 +14371,7 @@ async function embedBrandImage(pdfDoc, dataUrl){
   if(mime === 'image/jpeg' || mime === 'image/jpg') return pdfDoc.embedJpg(bytes);
   return pdfDoc.embedPng(bytes);
 }
-function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
+function letterheadHtml(bodyHtml, docTitle, pageFooterExtra, suppressRunningHeader){
   // Every printed document runs through here, so this one lookup is what makes a document
   // from a past year automatically print with THAT year's name/logo/address instead of
   // today's — using STATE.currentYear (the same Academic Year selector that already scopes
@@ -14416,7 +14423,7 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
   // unreadable. That's a real, confirmed rendering failure, not a theoretical risk, so this
   // reverts to the school name as text — the exact same margin-box mechanism the footer already
   // uses successfully below, with none of that sizing risk.
-  const topHeaderCss = brandName ? `
+  const topHeaderCss = (brandName && !suppressRunningHeader) ? `
         @top-center {
           content: "${cssContentEscape(brandName)}";
           font-family: Georgia,'Times New Roman',serif;
@@ -17248,7 +17255,7 @@ function renderSettings(){
       <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="sftYiddish" ${STATE.studentFieldToggles.yiddishNames!==false?'checked':''}> Yiddish names</label>
       <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="sftTransportation" ${STATE.studentFieldToggles.transportation!==false?'checked':''}> Transportation <span class="small muted">(the per-student "Rides school transportation" section)</span></label>
       <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="sftRespite" ${STATE.studentFieldToggles.respiteSelfDirection!==false?'checked':''}> Respite / Self-Direction billing</label>
-      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;"><input type="checkbox" id="sftMandate" ${STATE.dashboardComplianceWidgets.mandate!==false?'checked':''}> OT/PT/SLP scheduling limits &amp; service minutes <span class="small muted">(same switch as the Dashboard's Mandate compliance widget — see Dashboard &amp; Reports Widgets)</span></label>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;"><input type="checkbox" id="sftMandate" ${STATE.dashboardComplianceWidgets.mandate!==false?'checked':''}> Therapy / clinical services <span class="small muted">(OT/PT/SLP therapist assignment, service minutes, scheduling limits, mandates &amp; clinical goals — everywhere on a student's profile and quick-view popup. Turn this off for a reg-ed school with no in-house therapy program. Same switch as the Dashboard's Mandate compliance widget — see Dashboard &amp; Reports Widgets)</span></label>
       <button class="btn" onclick="saveStudentFieldToggles()">Save</button>
     </div>`,
 
