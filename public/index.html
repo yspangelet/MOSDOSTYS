@@ -528,6 +528,7 @@ function seedState(){
     branches:[{ id:'branch_main', name:'Your School', assumedName:'', hasLogo:false, address:'', phone:'' }],
     broadcastHistory:[], paymentProcessor:{ provider:'stripe', publishableKey:'', secretKey:'', webhookSecret:'', enabled:false },
     weeklyComplianceSchedule:{ weekday:'Friday', hour:14 }, families:[], familySuggestionDismissals:[],
+    registrationRequirements:[], registrationStages:['Waiting', 'Applied', 'Registered'],
     registrationLetterText:'Dear Parents,\n\nWelcome to the upcoming school year. To register your child, please:\n1. Complete the application\n2. Choose a payment plan and sign the tuition contract\n3. Submit up-to-date medical/immunization forms\n\nSincerely,\nThe School Administration',
     dayHours:{Mon:{start:'8:00',end:'15:30'}, Tue:{start:'8:00',end:'15:30'}, Wed:{start:'8:00',end:'15:30'}, Thu:{start:'8:00',end:'15:30'}, Fri:{start:'8:00',end:'12:00'}, Sat:{start:'8:00',end:'15:30'}},
     schoolDays:['Mon','Tue','Wed','Thu','Fri'],
@@ -1624,6 +1625,15 @@ function migrateState(){
   // array is the durable, explicitly-confirmed version used for ongoing billing, and intentionally
   // doesn't replace that simpler one.
   STATE.families = STATE.families || [];
+  // One shared checklist catalog (like tuitionFeeTypes) — completion is tracked per student, per
+  // YEAR (s.registrationStatus[year]), so last year's completed registration doesn't carry over
+  // and silently look "done" for a returning family re-enrolling this year.
+  STATE.registrationRequirements = STATE.registrationRequirements || []; // [{id, name, order}]
+  // The manual workflow pipeline a family moves through (e.g. Waiting -> Applied -> Registered) —
+  // deliberately separate from the requirement checklist above: staff set a stage by hand (a
+  // family can be "Applied" with nothing checked off yet), while the checklist tracks itself
+  // automatically as items get checked.
+  STATE.registrationStages = STATE.registrationStages || ['Waiting', 'Applied', 'Registered'];
   STATE.familySuggestionDismissals = STATE.familySuggestionDismissals || [];
   // Live position pings from a driver's own phone while Driver View is open — see
   // startSharingLiveLocation. Keyed the same way as transportLog (routeId_direction), holding
@@ -3061,8 +3071,8 @@ const PERMISSION_DEFS = [
   {key:'printBillingSheets', label:'Print Respite/billing sheets &amp; invoices (without seeing rates or $ summaries)', category:'Billing'},
   {key:'manageFamilies', label:'Manage Families/Parents — confirm sibling groupings, edit family labels, choose combined vs. separate tuition statements', category:'Families'},
   {key:'viewFamilies', label:'View the Families/Parents directory, read-only (no linking/unlinking or changing statement grouping)', category:'Families'},
-  {key:'manageRegistration', label:'Manage Registration — edit the letter text, pricing setup, and print/email Registration & Tuition documents', category:'Registration'},
-  {key:'viewRegistration', label:'View the Registration tab, read-only (print/email only, no editing the letter or pricing)', category:'Registration'},
+  {key:'manageRegistration', label:'Manage Registration — requirements, stages, per-student checklist/documents/AI-check, the letter text, tuition pricing, and print/email', category:'Registration'},
+  {key:'viewRegistration', label:'View the Registration tab, read-only (students/report/print/email only — no editing requirements, stages, the letter, or pricing)', category:'Registration'},
   {key:'manageHRIntake', label:'Manage new hire applications &amp; staff documents (School only) — includes SSN, pay info &amp; uploaded personnel files', category:'HR / Staff Intake'},
   {key:'approveOnboardingDocs', label:'Review, approve, or reject uploaded onboarding documents (Office Manager) — without this, manageHRIntake can still upload &amp; preview documents but cannot approve/reject them', category:'HR / Staff Intake'},
   {key:'viewPrivilegedStudentDocs', label:'View privileged student documents — SSN copies, sensitive legal/consent forms marked private at upload', category:'HR / Staff Intake'},
@@ -4906,7 +4916,7 @@ function renderStudentProfileSection(){
         const otherYearCount = allDocs.length - allDocs.filter(d=>!d.year || d.year===STATE.currentYear).length;
         return `${otherYearCount? `<label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-bottom:8px;font-size:12.5px;"><input type="checkbox" ${showAllYears?'checked':''} onchange="VIEW.studentDocsAllYears=this.checked;renderContent();"> Show ${otherYearCount} more from other years too</label>` : ''}
         ${docs.map(d=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;">
-          <span class="link" onclick="viewStudentDocument('${d.id}')">${d.privileged?'🔒':'📄'} ${escapeHtml(d.name)}${d.year?` <span class="muted small">(${escapeHtml(d.year)})</span>`:''}</span>
+          <span class="link" onclick="viewStudentDocument('${d.id}')">${d.privileged?'🔒':'📄'} ${escapeHtml(d.name)}${d.year?` <span class="muted small">(${escapeHtml(d.year)})</span>`:''}${d.registrationRequirementId?` <span class="muted small">(Registration: ${escapeHtml((byId(STATE.registrationRequirements,d.registrationRequirementId)||{}).name||'deleted requirement')})</span>`:''}</span>
           <span class="muted small">${fmtDate(d.uploadedAt.slice(0,10))} · ${escapeHtml(staffName(d.uploadedBy))} ${(can('editSetup')||d.uploadedBy===VIEW.userId)?`<button class="btn-ghost btn btn-sm" style="padding:1px 6px;margin-left:6px;" onclick="renameStudentDocument('${d.id}')" title="Rename">✏️</button><button class="btn-ghost btn btn-sm" style="padding:1px 6px;margin-left:2px;" onclick="deleteStudentDocument('${d.id}')">✕</button>`:''}</span>
         </div>`).join('') || '<div class="muted small">None uploaded yet.</div>'}`;
       })()}
@@ -5436,10 +5446,39 @@ function saveTuitionContractPricing(){
   };
   saveState(); toast('Tuition Contract pricing saved');
 }
+// The letter text used to be plain text (typed into a plain textarea, newlines converted to <br>
+// at print time) — now it's saved as real HTML from a rich-text editor (see
+// renderRegistrationLetterEditor) so bold/alignment/etc. can actually be preserved. Schools with
+// existing plain-text content saved before this changed shouldn't have it suddenly render wrong
+// (or need re-typing) just because the storage format changed — detecting an actual HTML tag is
+// enough to tell the two apart, since plain text typed by hand essentially never contains one.
+function registrationLetterHtml(){
+  const raw = STATE.registrationLetterText||'';
+  if(/<[a-z][\s\S]*>/i.test(raw)) return raw;
+  return escapeHtml(raw).replace(/\n/g,'<br>');
+}
 function saveRegistrationLetterText(){
   if(!canManageRegistration()){ toast('You do not have permission to edit this'); return; }
-  STATE.registrationLetterText = document.getElementById('regLetterText').value;
+  STATE.registrationLetterText = document.getElementById('regLetterEditor').innerHTML;
   saveState(); toast('Registration letter saved');
+}
+// Small execCommand-based toolbar rather than pulling in a rich-text-editor library for one
+// field — execCommand is informally deprecated but still broadly supported for exactly this kind
+// of basic bold/italic/alignment need, and every button below fires on mousedown with
+// preventDefault so clicking it doesn't steal focus away from the editable area first (focus
+// leaving is what would make execCommand act on nothing, or on whatever was selected before).
+function registrationLetterToolbarHtml(){
+  const btn = (cmd, label, title) => `<button type="button" class="btn-ghost btn btn-sm" title="${escapeHtml(title)}" onmousedown="event.preventDefault();document.execCommand('${cmd}');">${label}</button>`;
+  return `<div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;">
+    ${btn('bold','<b>B</b>','Bold')}
+    ${btn('italic','<i>I</i>','Italic')}
+    ${btn('underline','<u>U</u>','Underline')}
+    ${btn('justifyLeft','⬅','Align left')}
+    ${btn('justifyCenter','⬌','Center')}
+    ${btn('justifyRight','➡','Align right')}
+    ${btn('insertUnorderedList','• List','Bullet list')}
+    <button type="button" class="btn-ghost btn btn-sm" title="Remove formatting" onmousedown="event.preventDefault();document.execCommand('removeFormat');">Clear formatting</button>
+  </div>`;
 }
 function saveDashboardComplianceWidgets(){
   if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
@@ -5460,7 +5499,7 @@ function registrationPacketBodyHtml(family){
   const first = family.students[0];
   const familyDisplayName = registrationFamilyDisplayName(first);
   const mo = first.mother||{}, fa = first.father||{};
-  const letterBody = escapeHtml(STATE.registrationLetterText).replace(/\n/g,'<br>');
+  const letterBody = registrationLetterHtml();
   const studentRowsHtml = family.students.map(s=>`
     <tr>
       <td style="padding:6px;border:1px solid #999;">${escapeHtml(s.name)}</td>
@@ -5574,7 +5613,8 @@ function registrationEmailText(family){
   const names = family.students.map(s=>s.name).join(', ');
   const mo = first.mother||{}, fa = first.father||{};
   const contractBody = tuitionContractBodyHtml(family);
-  let text = `${STATE.registrationLetterText}\n\n---\n\nPARENT / STUDENT INFORMATION\n\nStudent(s): ${names}\n`;
+  const letterPlainText = htmlBodyToPlainParagraphs(registrationLetterHtml()).join('\n\n');
+  let text = `${letterPlainText}\n\n---\n\nPARENT / STUDENT INFORMATION\n\nStudent(s): ${names}\n`;
   if(fa.name) text += `Father: ${fa.name}${fa.cell?' · '+fa.cell:''}${fa.email?' · '+fa.email:''}\n`;
   if(mo.name) text += `Mother: ${mo.name}${mo.cell?' · '+mo.cell:''}${mo.email?' · '+mo.email:''}\n`;
   text += `\nPlease also complete and return: the Family/Student Information form (emergency contacts, medical information, and consent) — printed copies are available from the office — `;
@@ -14225,18 +14265,17 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
   // A repeating header on pages 2+ — page 1 already gets the full logo baked directly into the
   // body content just below, so this ONLY needs to appear starting from page 2 (via the
   // "@page :first" override below, the standard CSS Paged Media way to vary just the first
-  // page's margin boxes) — otherwise a multi-page document reads as headerless past page 1,
-  // and a page separated from the rest of the printout has nothing identifying it at a glance.
-  // Text rather than the logo image itself: the exact same margin-box mechanism as the footer
-  // below, already confirmed working in the same browsers, without the added cross-browser risk
-  // of sizing/positioning an <img> inside a CSS margin box.
-  const topHeaderCss = brandName ? `
+  // page's margin boxes) — otherwise a multi-page document reads as headerless past page 1, and
+  // a page separated from the rest of the printout has nothing identifying it at a glance. The
+  // actual logo image (not just the school name as text) — Chrome 131+/Safari 18.2+ support an
+  // image as page-margin-box content the same way the footer's text content is already supported
+  // in this file; sized to fit comfortably within the reserved top margin below.
+  const logoSrc = currentBrandLogoSrc();
+  const topHeaderCss = logoSrc ? `
         @top-center {
-          content: "${cssContentEscape(brandName)}";
-          font-family: Georgia,'Times New Roman',serif;
-          font-weight: 700;
-          font-size: 10.5pt;
-          color: #500F32;
+          content: url("${logoSrc}");
+          width: auto;
+          height: 30pt;
         }` : '';
   // No external font <link> — pop-up windows populated via document.write() are unreliable at
   // loading external stylesheets (Safari especially will just drop it silently), which is what
@@ -14245,7 +14284,7 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra){
   return `<html><head><meta charset="UTF-8"><title>${escapeHtml(docTitle)} — ${escapeHtml(brandName)}</title>
     <style>
       @page {
-        margin: 0.85in 0.55in 0.55in 0.55in;
+        margin: 1in 0.55in 0.55in 0.55in;
         /* Page numbers (and, when provided, the repeating identifying-info line and header) via
            CSS page margin boxes — native support landed in Chrome 131 (Nov 2024) and Safari 18.2
            (Dec 2024), so this renders correctly for most people printing or "Save as PDF"-ing
@@ -17577,6 +17616,419 @@ function saveManualFamily(){
   closeModal(); saveState(); renderContent();
   toast('Family linked');
 }
+// Thin wrapper around canManageRegistration that also toasts on failure — matches the exact
+// behavior every ported function below already expects from its original codebase.
+function requireRegistrationEdit(){
+  if(canManageRegistration()) return true;
+  toast("You don't have permission to edit Registration — ask an Admin to grant it in Settings → Roles & Permissions.");
+  return false;
+}
+function studentRegistrationStatus(student){
+  return (student.registrationStatus && student.registrationStatus[STATE.currentYear]) || {};
+}
+function studentRegistrationCompletion(student){
+  const total = STATE.registrationRequirements.length;
+  if(!total) return {done:0, total:0, pct:0};
+  const status = studentRegistrationStatus(student);
+  const done = STATE.registrationRequirements.filter(r=>status[r.id]).length;
+  return {done, total, pct: Math.round(done/total*100)};
+}
+function setStudentRegistrationItem(studentId, reqId, checked){
+  if(!requireRegistrationEdit()) return;
+  const s = byId(STATE.students, studentId); if(!s) return;
+  s.registrationStatus = s.registrationStatus || {};
+  s.registrationStatus[STATE.currentYear] = {...(s.registrationStatus[STATE.currentYear]||{}), [reqId]: checked};
+  saveState(); renderContent();
+}
+function setStudentRegistrationStage(studentId, stage){
+  if(!requireRegistrationEdit()) return;
+  const s = byId(STATE.students, studentId); if(!s) return;
+  s.registrationStatus = s.registrationStatus || {};
+  s.registrationStatus[STATE.currentYear] = {...(s.registrationStatus[STATE.currentYear]||{}), stage};
+  saveState(); renderContent();
+}
+async function uploadRegistrationDocument(studentId, reqId){
+  const input = document.getElementById('regDocFile_'+studentId+'_'+reqId);
+  const file = input && input.files && input.files[0];
+  if(!file){ toast('Choose a file first'); return; }
+  if(file.size > 4*1024*1024){ toast('Please use a file under about 4MB'); return; }
+  const reader = new FileReader();
+  reader.onload = async ()=>{
+    const id = uid('doc');
+    const res = await backendSaveStudentDocument(id, reader.result, {studentId, name:file.name, year:STATE.currentYear, registrationRequirementId:reqId});
+    if(!res.ok){ toast((res.body&&res.body.error)||'Could not upload the document'); return; }
+    STATE.studentDocuments.push(res.body.entry);
+    markKeysSynced(['studentDocuments']);
+    input.value = '';
+    renderContent(); toast('Document uploaded');
+  };
+  reader.onerror = ()=>toast('Could not read that file');
+  reader.readAsDataURL(file);
+}
+async function aiCheckRegistrationDocument(studentId, reqId, docId, requirementName){
+  toast('Asking AI to take a look…');
+  try{
+    const res = await backendGetStudentDocument(docId);
+    if(!(res.ok && res.body && res.body.data)){ toast('Could not load that document'); return; }
+    const dataUrl = res.body.data;
+    const mime = (dataUrl.match(/data:([^;]+)/)||[])[1] || '';
+    const base64 = dataUrl.split(',')[1];
+    if(!mime.startsWith('image/') && mime!=='application/pdf'){ toast('AI can only check image or PDF files'); return; }
+    const contentBlock = mime==='application/pdf'
+      ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
+      : {type:'image', source:{type:'base64', media_type:mime, data:base64}};
+    const data = await callClaudeAPI({ model:'claude-sonnet-5', max_tokens:250, messages:[{role:'user', content:[
+      contentBlock,
+      {type:'text', text:`This document was uploaded to satisfy a school registration requirement called "${requirementName}". Does it plausibly match? Return ONLY a raw JSON object, no markdown fences, no other text: {"matches": true|false, "note": "one short sentence saying what the document actually is and why/why not it matches"}. Use false (not a guessed true) whenever you're genuinely unsure — a person will review either way, so an honest "unsure" is more useful than a confident-sounding guess.`}
+    ]}]});
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+    let parsed; try{ parsed = JSON.parse(text.replace(/```json|```/g,'').trim()); }catch(e){ parsed = {matches:false, note:text||'AI returned something unexpected.'}; }
+    if(parsed.matches) setStudentRegistrationItem(studentId, reqId, true);
+    showModal(`<h3>🤖 AI check</h3>
+      <div class="small muted" style="margin-bottom:10px;">This is a quick sanity check, not a compliance certification — review the actual document yourself before relying on it.</div>
+      <div style="padding:10px;background:var(--surface-2);border-radius:8px;">${escapeHtml(parsed.note||'')}</div>
+      <div class="small" style="margin-top:8px;">${parsed.matches? '✓ Looks like a match — the checkbox has been checked automatically.' : 'Not auto-checked — review this one yourself.'}</div>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+  }catch(e){ console.error(e); toast('AI check failed: '+(e.message||'try again')); }
+}
+async function toggleRegistrationDocPreview(docId){
+  const el = document.getElementById('regDocPreview_'+docId);
+  if(!el) return;
+  if(el.style.display==='block'){ el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  if(el.dataset.loaded) return;
+  el.dataset.loaded = '1';
+  const res = await backendGetStudentDocument(docId);
+  if(!(res.ok && res.body && res.body.data)){ el.innerHTML = '<div class="muted small">Could not load this document.</div>'; return; }
+  const dataUrl = res.body.data;
+  const mime = (dataUrl.match(/data:([^;]+)/)||[])[1] || 'application/octet-stream';
+  const bytes = dataUrlToBytes(dataUrl);
+  const blobUrl = URL.createObjectURL(new Blob([bytes], {type:mime}));
+  el.innerHTML = mime.indexOf('image/')===0
+    ? `<img src="${blobUrl}" style="max-width:100%;max-height:50vh;display:block;">`
+    : `<embed src="${blobUrl}" type="${mime}" style="width:100%;height:50vh;border:none;">`;
+}
+async function aiSplitRegistrationPacket(studentId){
+  if(!requireRegistrationEdit()) return;
+  const s = byId(STATE.students, studentId); if(!s) return;
+  const reqs = STATE.registrationRequirements;
+  if(!reqs.length){ toast('Set up at least one requirement first (⚙ Requirements tab)'); return; }
+  const input = document.getElementById('regPacketFile_'+studentId);
+  const file = input && input.files && input.files[0];
+  if(!file){ toast('Choose a PDF first'); return; }
+  if(file.type !== 'application/pdf'){ toast('AI splitting only works on a PDF — a single image can just be uploaded directly against one requirement below'); return; }
+  const btn = document.getElementById('regSplitBtn_'+studentId);
+  if(btn){ btn.disabled = true; btn.innerHTML = '⏳ Reading packet…'; }
+  try{
+    const dataUrl = await new Promise((resolve,reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=>resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const bytes = dataUrlToBytes(dataUrl);
+    const pdfjsLib = await loadPdfJs();
+    const pdf = await pdfjsLib.getDocument({data:bytes.slice()}).promise;
+    const pageCount = pdf.numPages;
+    if(pageCount > 20){ toast(`This packet has ${pageCount} pages — AI splitting is limited to 20 pages at a time. Split it into two uploads first.`); return; }
+    if(btn) btn.innerHTML = `⏳ Reading ${pageCount} page${pageCount===1?'':'s'}…`;
+    const pageImages = [];
+    for(let i=1;i<=pageCount;i++){
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({scale: 1.6});
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      await page.render({canvasContext: canvas.getContext('2d'), viewport}).promise;
+      pageImages.push(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
+    }
+    if(btn) btn.innerHTML = '🤖 Identifying documents…';
+    const reqNames = reqs.map(r=>r.name);
+    const content = [
+      {type:'text', text:`These are the ${pageCount} pages, in order, of one scanned/merged registration packet for a student named ${s.name}. A packet like this often contains several separate forms (an application, health forms, a signed tuition contract, immunization records, etc.) — do not lump multiple distinct forms together into one entry just because they look similar or are short. Look at the actual heading/content on each page to tell where one form ends and the next begins. Group the pages into the separate individual documents actually contained inside (a form that legitimately runs onto a 2nd page stays ONE document; a new form starting mid-page still starts a new document at that page). For each document found, match it to the closest label from this school's registration requirement list if one genuinely fits: ${reqNames.length?reqNames.map(l=>`"${l}"`).join(', '):'(no requirements have been set up — just describe each document by what it actually is)'}.  If nothing on the list actually matches a given document, invent a short, clear plain-English label describing what it is instead — never force a bad match.
+
+Return ONLY a raw JSON array, no markdown fences, no other text, in exactly this shape:
+[{"label":"Health forms","startPage":1,"endPage":2,"matchedRequirement":true}, {"label":"Emergency Contact Sheet","startPage":3,"endPage":3,"matchedRequirement":false}]
+
+Every page from 1 to ${pageCount} must be covered by exactly one entry, in order, with no gaps or overlaps.`}
+    ];
+    pageImages.forEach((b64,i)=>{ content.push({type:'text', text:`Page ${i+1}:`}); content.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data:b64}}); });
+    const data = await callClaudeAPI({ model:'claude-sonnet-5', max_tokens:3000, messages:[{role:'user', content}] });
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+    let groups;
+    try{ groups = JSON.parse(text.replace(/```json|```/g,'').trim()); }catch(e){ throw new Error('AI returned something unexpected — try again'); }
+    if(!Array.isArray(groups) || !groups.length) throw new Error('AI could not identify any documents in this packet');
+    groups = groups.filter(g=>g && g.label && Number.isInteger(g.startPage) && Number.isInteger(g.endPage) && g.startPage>=1 && g.endPage>=g.startPage && g.endPage<=pageCount);
+    if(!groups.length) throw new Error('AI returned an unusable page grouping — try again');
+    if(btn) btn.innerHTML = `⏳ Splitting into ${groups.length} file${groups.length===1?'':'s'}…`;
+    const PDFLib = await loadPdfLib();
+    const srcDoc = await PDFLib.PDFDocument.load(bytes, {ignoreEncryption:true});
+    let created = 0, matched = 0;
+    const failedLabels = [];
+    for(const g of groups){
+      const outDoc = await PDFLib.PDFDocument.create();
+      const pageIndices = []; for(let p=g.startPage; p<=g.endPage; p++) pageIndices.push(p-1);
+      const copied = await outDoc.copyPages(srcDoc, pageIndices);
+      copied.forEach(p=>outDoc.addPage(p));
+      const outBytes = await outDoc.save();
+      const outDataUrl = bytesToDataUrl(outBytes, 'application/pdf');
+      const newId = uid('doc');
+      const matchedReq = g.matchedRequirement && reqs.find(r=>r.name.toLowerCase()===String(g.label).toLowerCase());
+      const meta = { studentId, name:`${g.label}.pdf`, year:STATE.currentYear, registrationRequirementId: matchedReq? matchedReq.id : undefined };
+      const uploadRes = await backendSaveStudentDocument(newId, outDataUrl, meta);
+      if(uploadRes.ok){
+        STATE.studentDocuments.push(uploadRes.body.entry);
+        created++;
+        if(matchedReq){
+          s.registrationStatus = s.registrationStatus || {};
+          s.registrationStatus[STATE.currentYear] = {...(s.registrationStatus[STATE.currentYear]||{}), [matchedReq.id]: true};
+          matched++;
+        }
+      } else failedLabels.push({label:g.label, error:(uploadRes.body&&uploadRes.body.error)||'unknown error'});
+    }
+    markKeysSynced(['studentDocuments']);
+    saveState();
+    input.value = '';
+    renderContent();
+    const createdLabels = groups.slice(0, created).map(g=>g.label).join(', ');
+    if(created===groups.length){
+      let msg = `✓ Split into ${created} document${created===1?'':'s'}: ${createdLabels}${matched?` — ${matched} requirement${matched===1?'':'s'} auto-checked`:''}`;
+      if(groups.length===1 && pageCount>=3) msg = `⚠ AI only found 1 document across all ${pageCount} pages ("${groups[0].label}") — it likely merged several distinct forms together instead of telling them apart. Check the result below before trusting it, and try again if it looks wrong.`;
+      toast(msg);
+    } else {
+      showModal(`<h3>⚠ Packet only partially uploaded</h3>
+        <p style="margin:8px 0;">${created} of ${groups.length} documents from this packet saved successfully. These did NOT save and still need to be uploaded again:</p>
+        <ul style="margin:8px 0 8px 20px;">${failedLabels.map(f=>`<li><strong>${escapeHtml(f.label)}</strong> — <span class="muted small">${escapeHtml(f.error)}</span></li>`).join('')}</ul>
+        <p class="muted small" style="margin:8px 0;">Successfully saved: ${escapeHtml(createdLabels||'none')}.</p>
+        <div class="modal-actions"><button class="btn" onclick="closeModal()">OK</button></div>`);
+    }
+  }catch(e){
+    console.error(e);
+    toast('Could not split this packet: ' + (e.message||'unknown error'));
+  }finally{
+    if(btn){ btn.disabled = false; btn.innerHTML = '✨ Split &amp; sort with AI'; }
+  }
+}
+function renderRegistrationStudents(editable){
+  const q = (VIEW.registrationSearch||'').trim().toLowerCase();
+  const students = studentsOfYear().filter(s=>!q || s.name.toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name));
+  if(VIEW.openRegistrationStudentId && !byId(STATE.students, VIEW.openRegistrationStudentId)) VIEW.openRegistrationStudentId = null;
+  if(VIEW.openRegistrationStudentId) return renderRegistrationStudentDetail(VIEW.openRegistrationStudentId, editable);
+  return `<div class="search-box" style="max-width:280px;margin-bottom:12px;"><input placeholder="Search students..." value="${escapeHtml(VIEW.registrationSearch||'')}" oninput="VIEW.registrationSearch=this.value;renderContent();"></div>
+  ${students.length? `<table><thead><tr><th>Student</th><th>Stage</th><th>Checklist progress</th></tr></thead><tbody>
+    ${students.map(s=>{
+      const {done,total,pct} = studentRegistrationCompletion(s);
+      const stage = studentRegistrationStatus(s).stage || '';
+      return `<tr style="cursor:pointer;" onclick="VIEW.openRegistrationStudentId='${s.id}';renderContent();">
+        <td><strong>${escapeHtml(s.name)}</strong></td>
+        <td>${stage? `<span class="pill pill-teal">${escapeHtml(stage)}</span>` : '<span class="muted">(not set)</span>'}</td>
+        <td>${total? `<div style="display:flex;align-items:center;gap:8px;"><div style="background:var(--surface-2);border-radius:6px;height:10px;width:100px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:${complianceRingColor(pct)};"></div></div><span class="small muted">${done}/${total}</span></div>` : '<span class="muted">—</span>'}</td>
+      </tr>`;
+    }).join('')}
+  </tbody></table>` : `<div class="card"><div class="empty-state">${q?'No students match your search.':'No students on file yet.'}</div></div>`}`;
+}
+function renderRegistrationStudentDetail(studentId, editable){
+  const s = byId(STATE.students, studentId); if(!s) return '';
+  const status = studentRegistrationStatus(s);
+  const reqs = STATE.registrationRequirements.slice().sort((a,b)=>(a.order||0)-(b.order||0));
+  const {done,total} = studentRegistrationCompletion(s);
+  const stage = status.stage || '';
+  return `<button class="btn-ghost btn btn-sm" style="margin-bottom:12px;" onclick="VIEW.openRegistrationStudentId=null;renderContent();">← All students</button>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+      <h3 style="margin:0;">${escapeHtml(s.name)}</h3>
+      <span class="small muted">${done}/${total} complete</span>
+    </div>
+    ${STATE.registrationStages.length? `<div class="form-row" style="max-width:260px;margin-bottom:14px;"><label>Stage</label><select ${editable?'':'disabled'} onchange="setStudentRegistrationStage('${s.id}', this.value)">
+      <option value="">(not set)</option>
+      ${STATE.registrationStages.map(st=>`<option value="${escapeHtml(st)}" ${stage===st?'selected':''}>${escapeHtml(st)}</option>`).join('')}
+    </select></div>` : ''}
+    ${editable && reqs.length? `<div class="card" style="background:var(--surface-2);margin-bottom:14px;padding:10px 12px;">
+      <div class="small" style="margin-bottom:6px;"><strong>✨ Split &amp; sort with AI</strong> — upload one scanned/merged PDF of everything this family submitted; AI splits it into separate documents, files each against the matching requirement below, and checks off any confident match.</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="file" id="regPacketFile_${s.id}" accept="application/pdf" style="max-width:240px;font-size:12px;">
+        <button class="btn-ghost btn btn-sm btn-ai" id="regSplitBtn_${s.id}" onclick="aiSplitRegistrationPacket('${s.id}')">✨ Split &amp; sort with AI</button>
+      </div>
+    </div>` : ''}
+    ${reqs.length? reqs.map(r=>{
+      const docs = STATE.studentDocuments.filter(d=>d.studentId===s.id && d.registrationRequirementId===r.id);
+      return `<div style="padding:8px 0;border-bottom:1px solid var(--line);">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;${editable?'cursor:pointer;':'opacity:.85;'}">
+        <input type="checkbox" ${status[r.id]?'checked':''} ${editable?`onchange="setStudentRegistrationItem('${s.id}','${r.id}',this.checked)"`:'disabled'}> ${escapeHtml(r.name)}
+      </label>
+      ${docs.length? `<div style="margin:6px 0 0 26px;">${docs.map(d=>`<div style="padding:2px 0;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="link small" onclick="toggleRegistrationDocPreview('${d.id}')">📄 ${escapeHtml(d.name)}</span>
+          <button class="btn-ghost btn btn-sm" style="padding:2px 8px;font-size:11px;" onclick="aiCheckRegistrationDocument('${s.id}','${r.id}','${d.id}','${escapeHtml(r.name).replace(/'/g,"&#39;")}')">🤖 AI check</button>
+          <button class="btn-ghost btn btn-sm" style="padding:2px 8px;font-size:11px;" onclick="viewStudentDocument('${d.id}')">↗ Open full size</button>
+          ${editable? `<button class="btn-ghost btn btn-sm" style="padding:2px 8px;font-size:11px;color:#B3261E;" onclick="deleteStudentDocument('${d.id}')">🗑</button>` : ''}
+        </div>
+        <div id="regDocPreview_${d.id}" style="display:none;margin-top:6px;border:1px solid var(--line);border-radius:8px;background:#525659;padding:6px;"></div>
+      </div>`).join('')}</div>` : ''}
+      ${editable? `<div style="margin:6px 0 0 26px;display:flex;gap:6px;align-items:center;">
+        <input type="file" id="regDocFile_${s.id}_${r.id}" style="max-width:220px;font-size:12px;">
+        <button class="btn-ghost btn btn-sm" onclick="uploadRegistrationDocument('${s.id}','${r.id}')">⬆ Upload</button>
+      </div>` : ''}
+    </div>`;
+    }).join('') : `<div class="empty-state">No requirements set up yet.</div>`}
+  </div>`;
+}
+function renderRegistrationReport(){
+  const students = studentsOfYear();
+  const reqs = STATE.registrationRequirements;
+  const completions = students.map(s=>studentRegistrationCompletion(s));
+  const fullyComplete = completions.filter(c=>c.total>0 && c.done===c.total).length;
+  const notStarted = completions.filter(c=>c.done===0).length;
+  const inProgress = students.length - fullyComplete - notStarted;
+  const incompleteStudents = students.filter(s=>{ const c=studentRegistrationCompletion(s); return c.total>0 && c.done<c.total; }).sort((a,b)=>a.name.localeCompare(b.name));
+  return `
+  ${STATE.registrationStages.length? `<div class="card" style="margin-bottom:14px;">
+    <h3 style="margin-top:0;">By stage</h3>
+    ${[...STATE.registrationStages, ''].map(st=>{
+      const count = students.filter(s=>(studentRegistrationStatus(s).stage||'')===st).length;
+      if(!count && st==='') return '';
+      const pct = students.length? Math.round(count/students.length*100) : 0;
+      return `<div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><strong>${st? escapeHtml(st) : '(not set)'}</strong><span class="muted">${count} of ${students.length}</span></div>
+        <div style="background:var(--surface-2);border-radius:6px;height:12px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:${st?'#5B8AA6':'#C9C2CD'};"></div></div>
+      </div>`;
+    }).join('')}
+  </div>` : ''}
+  <div class="card" style="margin-bottom:14px;">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
+      <div><div class="muted small">FULLY REGISTERED</div><div style="font-size:24px;font-weight:700;color:#1E7A4C;">${fullyComplete} of ${students.length}</div></div>
+      <div><div class="muted small">IN PROGRESS</div><div style="font-size:24px;font-weight:700;color:#B5720A;">${inProgress}</div></div>
+      <div><div class="muted small">NOT STARTED</div><div style="font-size:24px;font-weight:700;">${notStarted}</div></div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
+    <h3 style="margin-top:0;">By requirement</h3>
+    ${reqs.length? reqs.slice().sort((a,b)=>(a.order||0)-(b.order||0)).map(r=>{
+      const doneCount = students.filter(s=>studentRegistrationStatus(s)[r.id]).length;
+      const pct = students.length? Math.round(doneCount/students.length*100) : 0;
+      return `<div style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><strong>${escapeHtml(r.name)}</strong><span class="muted">${doneCount} of ${students.length}</span></div>
+        <div style="background:var(--surface-2);border-radius:6px;height:12px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:${complianceRingColor(pct)};"></div></div>
+      </div>`;
+    }).join('') : '<div class="empty-state">No requirements set up yet.</div>'}
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0;">Still needs attention (${incompleteStudents.length})</h3>
+    ${incompleteStudents.length? `<table><thead><tr><th>Student</th><th>Missing</th></tr></thead><tbody>
+      ${incompleteStudents.map(s=>{
+        const status = studentRegistrationStatus(s);
+        const missing = STATE.registrationRequirements.filter(r=>!status[r.id]).map(r=>r.name);
+        return `<tr><td><span class="link" onclick="VIEW.registrationTab='students';VIEW.openRegistrationStudentId='${s.id}';renderContent();">${escapeHtml(s.name)}</span></td><td class="small muted">${missing.map(m=>escapeHtml(m)).join(', ')}</td></tr>`;
+      }).join('')}
+    </tbody></table>` : `<div class="empty-state">Everyone with at least one item checked is fully complete.</div>`}
+  </div>`;
+}
+function renderRegistrationRequirements(editable){
+  const reqs = STATE.registrationRequirements.slice().sort((a,b)=>(a.order||0)-(b.order||0));
+  return `<div class="card">
+    <div class="muted small" style="margin-bottom:12px;">The checklist every student is tracked against for ${escapeHtml(STATE.currentYear)} — one shared list, same for every student, unless you change it here.</div>
+    ${reqs.length? reqs.map((r,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);">
+      ${editable? `<span style="display:flex;flex-direction:column;">
+        <button class="btn-ghost btn btn-sm" style="padding:0 6px;font-size:10px;" ${i===0?'disabled':''} onclick="moveRegistrationRequirement('${r.id}',-1)">▲</button>
+        <button class="btn-ghost btn btn-sm" style="padding:0 6px;font-size:10px;" ${i===reqs.length-1?'disabled':''} onclick="moveRegistrationRequirement('${r.id}',1)">▼</button>
+      </span>` : ''}
+      <span style="flex:1;">${escapeHtml(r.name)}</span>
+      ${editable? `<button class="btn-ghost btn btn-sm" onclick="renameRegistrationRequirement('${r.id}')">✎</button><button class="btn-ghost btn btn-sm" style="color:#B3261E;" onclick="deleteRegistrationRequirement('${r.id}')">🗑</button>` : ''}
+    </div>`).join('') : '<div class="empty-state">No requirements yet.</div>'}
+    ${editable? `<div style="display:flex;gap:8px;margin-top:14px;"><input id="newRegRequirement" placeholder="e.g. Health forms submitted" style="flex:1;" onkeydown="if(event.key==='Enter')addRegistrationRequirement();"><button class="btn" onclick="addRegistrationRequirement()">+ Add</button></div>` : ''}
+  </div>`;
+}
+function addRegistrationRequirement(){
+  if(!requireRegistrationEdit()) return;
+  const input = document.getElementById('newRegRequirement');
+  const name = input.value.trim();
+  if(!name){ toast('Enter a name'); return; }
+  const maxOrder = STATE.registrationRequirements.reduce((max,r)=>Math.max(max, r.order||0), 0);
+  STATE.registrationRequirements.push({id:uid('reg'), name, order:maxOrder+1});
+  input.value = '';
+  saveState(); renderContent();
+}
+function renameRegistrationRequirement(id){
+  if(!requireRegistrationEdit()) return;
+  const r = byId(STATE.registrationRequirements, id); if(!r) return;
+  showPrompt('Rename this requirement', r.name, (newName)=>{
+    if(!newName || !newName.trim()) return;
+    r.name = newName.trim();
+    saveState(); renderContent();
+  });
+}
+function deleteRegistrationRequirement(id){
+  if(!requireRegistrationEdit()) return;
+  showDangerConfirm('Delete this requirement? Any student progress checked off against it is lost.', ()=>{
+    STATE.registrationRequirements = STATE.registrationRequirements.filter(r=>r.id!==id);
+    saveState(); closeModal(); renderContent();
+  }, 'Delete requirement');
+}
+function moveRegistrationRequirement(id, delta){
+  if(!requireRegistrationEdit()) return;
+  const reqs = STATE.registrationRequirements.slice().sort((a,b)=>(a.order||0)-(b.order||0));
+  const idx = reqs.findIndex(r=>r.id===id);
+  const j = idx+delta; if(j<0||j>=reqs.length) return;
+  [reqs[idx].order, reqs[j].order] = [reqs[j].order, reqs[idx].order];
+  saveState(); renderContent();
+}
+function renderRegistrationStages(editable){
+  const stages = STATE.registrationStages;
+  return `<div class="card">
+    <div class="muted small" style="margin-bottom:12px;">The workflow stages families move through — shown as a dropdown on each student's Registration page. Separate from the requirement checklist: a stage is something staff set by hand (e.g. "Applied" the day a form comes in), while the checklist tracks itself automatically as items get checked off.</div>
+    ${stages.length? stages.map((st,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);">
+      ${editable? `<span style="display:flex;flex-direction:column;">
+        <button class="btn-ghost btn btn-sm" style="padding:0 6px;font-size:10px;" ${i===0?'disabled':''} onclick="moveRegistrationStage(${i},-1)">▲</button>
+        <button class="btn-ghost btn btn-sm" style="padding:0 6px;font-size:10px;" ${i===stages.length-1?'disabled':''} onclick="moveRegistrationStage(${i},1)">▼</button>
+      </span>` : ''}
+      <span style="flex:1;">${escapeHtml(st)}</span>
+      ${editable? `<button class="btn-ghost btn btn-sm" onclick="renameRegistrationStage(${i})">✎</button><button class="btn-ghost btn btn-sm" style="color:#B3261E;" onclick="deleteRegistrationStage(${i})">🗑</button>` : ''}
+    </div>`).join('') : '<div class="empty-state">No stages set up — every student shows as "(not set)".</div>'}
+    ${editable? `<div style="display:flex;gap:8px;margin-top:14px;"><input id="newRegStage" placeholder="e.g. Waitlisted" style="flex:1;" onkeydown="if(event.key==='Enter')addRegistrationStage();"><button class="btn" onclick="addRegistrationStage()">+ Add</button></div>` : ''}
+  </div>`;
+}
+function addRegistrationStage(){
+  if(!requireRegistrationEdit()) return;
+  const input = document.getElementById('newRegStage');
+  const name = input.value.trim();
+  if(!name){ toast('Enter a name'); return; }
+  if(STATE.registrationStages.includes(name)){ toast('That stage already exists'); return; }
+  STATE.registrationStages.push(name);
+  input.value = '';
+  saveState(); renderContent();
+}
+function renameRegistrationStage(idx){
+  if(!requireRegistrationEdit()) return;
+  const oldName = STATE.registrationStages[idx]; if(oldName===undefined) return;
+  showPrompt('Rename this stage', oldName, (newName)=>{
+    newName = (newName||'').trim();
+    if(!newName || newName===oldName) return;
+    STATE.registrationStages[idx] = newName;
+    STATE.students.forEach(s=>{
+      const yearStatus = s.registrationStatus && s.registrationStatus[STATE.currentYear];
+      if(yearStatus && yearStatus.stage===oldName) yearStatus.stage = newName;
+    });
+    saveState(); renderContent();
+  });
+}
+function deleteRegistrationStage(idx){
+  if(!requireRegistrationEdit()) return;
+  const name = STATE.registrationStages[idx]; if(name===undefined) return;
+  const inUse = STATE.students.some(s=>{ const ys=s.registrationStatus&&s.registrationStatus[STATE.currentYear]; return ys && ys.stage===name; });
+  showDangerConfirm(`Delete the "${escapeHtml(name)}" stage?${inUse?' Any student currently on it will show as "(not set)" afterward.':''}`, ()=>{
+    STATE.registrationStages = STATE.registrationStages.filter((_,i)=>i!==idx);
+    STATE.students.forEach(s=>{
+      const yearStatus = s.registrationStatus && s.registrationStatus[STATE.currentYear];
+      if(yearStatus && yearStatus.stage===name) yearStatus.stage = '';
+    });
+    saveState(); closeModal(); renderContent();
+  }, 'Delete stage');
+}
+function moveRegistrationStage(idx, delta){
+  if(!requireRegistrationEdit()) return;
+  const j = idx+delta; if(j<0||j>=STATE.registrationStages.length) return;
+  [STATE.registrationStages[idx], STATE.registrationStages[j]] = [STATE.registrationStages[j], STATE.registrationStages[idx]];
+  saveState(); renderContent();
+}
 function canManageRegistration(){ return currentStaff().role==='Admin' || can('manageRegistration'); }
 function canViewRegistration(){ return canManageRegistration() || can('viewRegistration'); }
 // Everything that touches Registration used to be spread across three places (Settings → the
@@ -17608,8 +18060,9 @@ function renderRegistrationFamilies(editable){
 function renderRegistrationLetterEditor(){
   return `<div class="card">
     <h3>📝 Registration Letter</h3>
-    <div class="muted small" style="margin-bottom:12px;">The cover letter printed as page 1 of the Registration packet. Editable text — update it for a new academic year (Hebrew date, requirements, wording) any time, right here, no code change needed. Supports Hebrew/Yiddish text directly.</div>
-    <div class="form-row"><textarea id="regLetterText" dir="auto" rows="16" style="font-family:inherit;font-size:14px;line-height:1.5;">${escapeHtml(STATE.registrationLetterText)}</textarea></div>
+    <div class="muted small" style="margin-bottom:12px;">The cover letter printed as page 1 of the Registration packet. Editable — update it for a new academic year (Hebrew date, requirements, wording) any time, right here, no code change needed. Supports Hebrew/Yiddish text (right-to-left) directly, plus bold, italic, underline, alignment, and bullet lists.</div>
+    ${registrationLetterToolbarHtml()}
+    <div id="regLetterEditor" contenteditable="true" dir="auto" style="min-height:320px;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-family:inherit;font-size:14px;line-height:1.6;margin-bottom:10px;">${registrationLetterHtml()}</div>
     <button class="btn" onclick="saveRegistrationLetterText()">Save</button>
   </div>`;
 }
@@ -17631,14 +18084,22 @@ function renderRegistrationPricing(){
 function renderRegistration(){
   if(!canViewRegistration()) return `<div class="empty-state">You don't have permission to view Registration. Ask an Admin to grant "View the Registration tab" or "Manage Registration" in Settings → Roles &amp; Permissions.</div>`;
   const editable = canManageRegistration();
-  const tab = VIEW.registrationTab || 'families';
-  const tabs = [['families','Families'], ['letter','Registration Letter'], ['pricing','Tuition Contract Pricing']];
-  return `<h2 style="margin-top:0;">📋 Registration</h2>
+  if(!VIEW.registrationTab) VIEW.registrationTab = 'students';
+  const tab = VIEW.registrationTab;
+  const tabs = [['students','Students'], ['report','📊 Report'], ['requirements','⚙ Requirements'], ['stages','🏷 Stages'], ['families','Families'], ['letter','Registration Letter'], ['pricing','Tuition Contract Pricing']];
+  const needsFullEdit = (tab==='letter' || tab==='pricing') && !editable;
+  return `<h2 style="margin-top:0;">📋 Registration — ${escapeHtml(STATE.currentYear)}</h2>
   <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;">
     ${tabs.map(([key,label])=>`<button class="settings-pill ${tab===key?'active':''}" onclick="VIEW.registrationTab='${key}';renderContent();">${escapeHtml(label)}</button>`).join('')}
   </div>
-  ${tab==='families' ? renderRegistrationFamilies(editable)
-    : (!editable) ? `<div class="empty-state">Editing the letter and pricing requires "Manage Registration" — ask an Admin.</div>`
+  ${!editable? `<div class="card" style="background:#F6F1E7;border:1px solid #E9D9BC;margin-bottom:12px;"><div class="small">👁️ View-only access.</div></div>` : ''}
+  ${!STATE.registrationRequirements.length && tab==='students'? `<div class="card" style="margin-bottom:12px;"><div class="empty-state">No registration requirements set up yet. ${editable?'Add some in the ⚙ Requirements tab to get started.':'Ask an Admin to set some up.'}</div></div>` : ''}
+  ${needsFullEdit ? `<div class="empty-state">Editing the letter and pricing requires "Manage Registration" — ask an Admin.</div>`
+    : tab==='students' ? renderRegistrationStudents(editable)
+    : tab==='report' ? renderRegistrationReport()
+    : tab==='requirements' ? renderRegistrationRequirements(editable)
+    : tab==='stages' ? renderRegistrationStages(editable)
+    : tab==='families' ? renderRegistrationFamilies(editable)
     : tab==='letter' ? renderRegistrationLetterEditor()
     : renderRegistrationPricing()}`;
 }
