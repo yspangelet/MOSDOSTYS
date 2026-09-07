@@ -5592,14 +5592,23 @@ function registrationPacketBodyHtml(family){
   // reads the same way regardless of which table it's in. Padding, font sizes, and margins here
   // are all deliberately tight — this whole form is meant to fit on ONE printed page.
   const PAD = '3px 8px';
+  // A second, taller padding used specifically for boxes that are typically blank on a fresh
+  // registration — Emergency Contact, Medical, Grandparents, Contact Preference — versus the
+  // compact PAD above used for Family/Father's/Mother's/Student's Information, which is usually
+  // already-known data pulled straight from the record, not something someone needs room to
+  // physically write into by hand. A box meant to be filled in with a pen needs real room for an
+  // actual signature-sized answer, not just enough height to display one line of typed text.
+  const WPAD = '9px 8px';
   const LABEL = 'font-weight:700;font-size:8.5px;text-transform:uppercase;letter-spacing:.02em;color:#500F32;line-height:1.3;';
   const cell = (label, value, w) => `<td style="padding:${PAD};border:1px solid #999;vertical-align:top;${w?`width:${w};`:''}"><div style="${LABEL}">${label}</div><div style="line-height:1.25;">${value||'&nbsp;'}</div></td>`;
-  const th = (label) => `<th style="padding:${PAD};border:1px solid #999;background:#F1E3EC;text-align:left;${LABEL}">${label}</th>`;
+  const wcell = (label, value, w) => `<td style="padding:${WPAD};border:1px solid #999;vertical-align:top;${w?`width:${w};`:''}"><div style="${LABEL}">${label}</div><div style="line-height:1.25;">${value||'&nbsp;'}</div></td>`;
+  const th = (label, w) => `<th style="padding:${PAD};border:1px solid #999;background:#F1E3EC;text-align:left;${LABEL}${w?`width:${w};`:''}">${label}</th>`;
   const td = (value) => `<td style="padding:${PAD};border:1px solid #999;line-height:1.25;">${value||'&nbsp;'}</td>`;
+  const wtd = (value) => `<td style="padding:${WPAD};border:1px solid #999;line-height:1.25;vertical-align:top;">${value||'&nbsp;'}</td>`;
   // A colored left rule on every section heading — a small, deliberate touch that turns a plain
   // black heading into something that reads as an actual designed form rather than a Word
   // printout, and gives the eye a consistent left edge to scan down the page by.
-  const h3 = (label) => `<h3 style="margin:6px 0 2px;font-size:11.5px;border-left:3px solid #500F32;padding-left:6px;">${label}</h3>`;
+  const h3 = (label) => `<h3 style="margin:4px 0 1px;font-size:11.5px;border-left:3px solid #500F32;padding-left:6px;">${label}</h3>`;
   // Cell Phone and Can Text share ONE box (two lines within it) instead of each getting a
   // separate row — a separate row for this made the whole page a full extra row taller per
   // parent, which was the single biggest reason this page had started spilling onto a second sheet.
@@ -5633,34 +5642,34 @@ function registrationPacketBodyHtml(family){
   // two-column form, not a page dominated by blank white space.
   const leftColumnHtml = `
     ${h3('Emergency Contact Information')}
-    <table style="width:100%;border-collapse:collapse;margin-bottom:6px;">
-      <thead><tr>${th('Name')}${th('Relationship')}${th('Phone')}</tr></thead>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:6px;table-layout:fixed;">
+      <thead><tr>${th('Name','40%')}${th('Relationship','24%')}${th('Phone','36%')}</tr></thead>
       <tbody>
-      <tr>${td(escapeHtml(ec1.name||''))}${td(escapeHtml(ec1.relationship||''))}${td(escapeHtml(ec1.phone||''))}</tr>
-      <tr>${td(escapeHtml(ec2.name||''))}${td(escapeHtml(ec2.relationship||''))}${td(escapeHtml(ec2.phone||''))}</tr>
+      <tr>${wtd(escapeHtml(ec1.name||''))}${wtd(escapeHtml(ec1.relationship||''))}${wtd(escapeHtml(ec1.phone||''))}</tr>
+      <tr>${wtd(escapeHtml(ec2.name||''))}${wtd(escapeHtml(ec2.relationship||''))}${wtd(escapeHtml(ec2.phone||''))}</tr>
       </tbody>
     </table>
     ${h3("Grandparent's Information")}
     <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
-      <tr>${cell('Name (Paternal)', escapeHtml(gpP.name||''), '38%')}${cell('Address', gpP.address?formatAddressForPrint(gpP.address):'', '31%')}${cell('Phone', escapeHtml(gpP.phone||''), '31%')}</tr>
-      <tr>${cell('Name (Maternal)', escapeHtml(gpM.name||''), '38%')}${cell('Address', gpM.address?formatAddressForPrint(gpM.address):'', '31%')}${cell('Phone', escapeHtml(gpM.phone||''), '31%')}</tr>
+      <tr>${wcell('Name (Paternal)', escapeHtml(gpP.name||''), '38%')}${wcell('Address', gpP.address?formatAddressForPrint(gpP.address):'', '31%')}${wcell('Phone', escapeHtml(gpP.phone||''), '31%')}</tr>
+      <tr>${wcell('Name (Maternal)', escapeHtml(gpM.name||''), '38%')}${wcell('Address', gpM.address?formatAddressForPrint(gpM.address):'', '31%')}${wcell('Phone', escapeHtml(gpM.phone||''), '31%')}</tr>
     </table>`;
   const rightColumnHtml = `
     ${h3('Medical Information')}
     <table style="width:100%;border-collapse:collapse;margin-bottom:6px;table-layout:fixed;">
-      <tr>${cell('Family Doctor', escapeHtml(med.doctorName||''), '40%')}${cell('Address', med.doctorAddress?formatAddressForPrint(med.doctorAddress):'', '30%')}${cell('Phone', escapeHtml(med.doctorPhone||''), '30%')}</tr>
-      <tr><td colspan="3" style="padding:${PAD};border:1px solid #999;vertical-align:top;"><div style="${LABEL}">Medical Comment / Allergies</div><div style="line-height:1.25;">${escapeHtml(medicalComment)||'&nbsp;'}</div></td></tr>
+      <tr>${wcell('Family Doctor', escapeHtml(med.doctorName||''), '40%')}${wcell('Address', med.doctorAddress?formatAddressForPrint(med.doctorAddress):'', '30%')}${wcell('Phone', escapeHtml(med.doctorPhone||''), '30%')}</tr>
+      <tr><td colspan="3" style="padding:${WPAD};border:1px solid #999;vertical-align:top;"><div style="${LABEL}">Medical Comment / Allergies</div><div style="line-height:1.25;">${escapeHtml(medicalComment)||'&nbsp;'}</div></td></tr>
     </table>
     ${h3('Contact Preference')}
     <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
-      <tr>${cell('Best person to contact', escapeHtml(pref.person||''), '50%')}${cell('Best way to contact', escapeHtml(pref.method||''), '50%')}</tr>
+      <tr>${wcell('Best person to contact', escapeHtml(pref.person||''), '50%')}${wcell('Best way to contact', escapeHtml(pref.method||''), '50%')}</tr>
     </table>`;
   return `
     <div dir="auto" style="line-height:1.6;">
       ${mailingAddressBlockHtml}
       <div style="margin-top:0.4in;">${letterBody}</div>
     </div>
-    <div style="page-break-before:always;font-size:11px;padding:0 0.3in;">
+    <div style="page-break-before:always;font-size:11px;padding:0 0.15in;">
       ${letterheadHeaderHtml()}
       <h2 style="text-align:center;margin:0 0 6px;font-size:16px;">PARENT / STUDENT INFORMATION</h2>
       ${h3('Family Information')}
@@ -5680,7 +5689,7 @@ function registrationPacketBodyHtml(family){
         <thead><tr>${th('ערשטע נאמען / Legal Name')}${th('Student ID')}${th('כתה / Class')}${th('DOB / יום הולדת')}</tr></thead>
         <tbody>${studentRowsHtml}</tbody>
       </table>
-      <div style="display:flex;gap:0.3in;">
+      <div style="display:flex;gap:0.2in;">
         <div style="flex:1;min-width:0;">${leftColumnHtml}</div>
         <div style="flex:1;min-width:0;">${rightColumnHtml}</div>
       </div>
