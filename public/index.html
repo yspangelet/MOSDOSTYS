@@ -1382,6 +1382,11 @@ function migrateState(){
   // extend the Medicaid-billing data shapes to also mean something totally different.
   STATE.tuitionFeeTypes = STATE.tuitionFeeTypes || []; // [{id, name, defaultAmount, frequency:'monthly'|'oneTime'|'yearly'}]
   STATE.tuitionPayments = STATE.tuitionPayments || []; // [{id, studentId, date, amount, method, note, recordedBy, recordedAt}]
+  // Immunizations — entirely school-defined (Settings → Service Requirements → Immunizations),
+  // never a hardcoded regulatory list; see studentImmunizationStatus for how compliance is judged
+  // against it. Individual doses live on each student's own record (student.immunizations),
+  // initialized lazily wherever they're read/written rather than here.
+  STATE.requiredImmunizations = STATE.requiredImmunizations || []; // [{id, name, requiredDoses}]
   // Fundraising — a separate module from tuition/Billing above: donors giving money to the
   // school by choice (a gala, a building campaign, a general annual appeal), not families paying
   // what they owe. Kept as its own set of records rather than folded into billing/students, since
@@ -4795,7 +4800,7 @@ function renderStudentProfileSection(){
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         ${dirViewToggleHtml('students')}
         <button class="btn-ghost btn" onclick='openAdmissionCardsPickerModal(${JSON.stringify(visible.map(s=>s.id))})'>🎫 Print admission cards — all</button>
-        ${can('editSetup')? `<button class="btn-ghost btn" onclick="backfillHebrewDobs()" title="Fills in anyone missing one, and corrects anyone whose saved version predates real Hebrew script">🔄 Fill in/fix Yiddish DOBs</button><button class="btn-ghost btn" onclick="openImportCsvModal('students')">⬆ Import CSV</button><button class="btn" onclick="openStudentModal()">+ Add student</button>`:''}
+        ${can('editSetup')? `<button class="btn-ghost btn" onclick="backfillHebrewDobs()" title="Fills in anyone missing one, and corrects anyone whose saved version predates real Hebrew script">🔄 Fill in/fix Yiddish DOBs</button><button class="btn-ghost btn" onclick="generateMissingStudentIds()" title="Assigns a school Student ID to anyone who doesn't have one yet — never changes an existing one">🔢 Generate missing Student IDs</button><button class="btn-ghost btn" onclick="openImportCsvModal('students')">⬆ Import CSV</button><button class="btn" onclick="openStudentModal()">+ Add student</button>`:''}
       </div>
     </div>
     ${visible.length>4? `<div class="search-box" style="max-width:340px;"><input class="tinput" placeholder="Search by name, class, or diagnosis..." oninput="filterStudentsDirectory(this)"></div>`:''}
@@ -4949,6 +4954,7 @@ function renderStudentProfileSection(){
       ${canViewPrivilegedStudentDocs()? `<label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:6px;font-size:12.5px;"><input type="checkbox" id="studentDocPrivileged_${student.id}"> Mark as privileged — only Admin or "View privileged student documents" can see this one</label>` : ''}
       <div class="muted small" style="margin-top:4px;">PDF or image, up to about 4MB. Tagged by academic year, e.g. a consent form valid for one year — defaults to the year currently selected.</div>` : ''}
     </div>
+    ${renderStudentImmunizationsCard(student)}
     <div class="card" style="grid-column:1/-1;">
       <h3>Parent contact log</h3>
       ${contacts.length? contacts.map(c=>`<div style="margin-bottom:6px;"><strong>${staffName(c.staffId)}</strong> — ${c.method} <span class="muted small">${fmtDate(c.date)}</span>: ${escapeHtml(c.note||'')}</div>`).join('') : '<div class="muted small">No contacts logged.</div>'}
@@ -5580,21 +5586,21 @@ function registrationPacketBodyHtml(family){
   const gp = first.grandparents||{}; const gpP = gp.paternal||{}, gpM = gp.maternal||{};
   const letterBody = personalizedRegistrationLetterHtml(first);
   const medicalComment = [med.comment, ...family.students.map(s=>s.allergies)].filter(Boolean).join('; ');
-  // td/th padding and h3 margins are kept tight to fit the whole Family/Father/Mother/Student/
-  // Emergency/Medical/Grandparents form on ONE printed page — this is meant to be handed to a
-  // family as a single sheet, not spill onto a second page. The page itself still gets a little
-  // extra side padding (below) so the content doesn't feel jammed against the edge, without
-  // making the boxes themselves any narrower than they need to be.
-  const td = 'padding:4px 10px;border:1px solid #999;';
+  // A "label above, value below" cell — instead of cramming a bilingual label and its value onto
+  // one line (which wrapped badly for anything long, like a formal salutation or a name with a
+  // prefix) — reads like an actual form and never fights with the value for space. `w` is a CSS
+  // width string (e.g. "33%"); omit it to let the cell size naturally (used for the 4-across
+  // Father's/Mother's rows, where all four columns share the row evenly by default).
+  const cell = (label, value, w) => `<td style="padding:5px 10px;border:1px solid #999;vertical-align:top;${w?`width:${w};`:''}"><div style="font-weight:600;font-size:10px;color:#500F32;margin-bottom:2px;">${label}</div><div>${value||'&nbsp;'}</div></td>`;
+  const canTextLine = (canText) => canText===true? 'Yes' : canText===false? 'No' : '&nbsp;';
   const studentRowsHtml = family.students.map(s=>{
     const yiddish = s.yiddishName ? ` (${escapeHtml([s.yiddishName, s.yiddishLastName].filter(Boolean).join(' '))})` : '';
     return `
     <tr>
-      <td style="${td}">${escapeHtml(s.name)}${yiddish}</td>
-      <td style="${td}">${escapeHtml(s.studentIdNumber||'')}</td>
-      <td style="${td}">${escapeHtml(className(s.classId))}</td>
-      <td style="${td}">${s.dob?fmtDate(s.dob):''}${s.hebrewDob?` <span dir="rtl">(${escapeHtml(s.hebrewDob)})</span>`:''}</td>
-      <td style="${td}">${s.usesTransportation!==false?'Yes':'No'}</td>
+      <td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(s.name)}${yiddish}</td>
+      <td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(s.studentIdNumber||'')||'&nbsp;'}</td>
+      <td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(className(s.classId))}</td>
+      <td style="padding:5px 10px;border:1px solid #999;">${s.dob?fmtDate(s.dob):''}${s.hebrewDob?` <span dir="rtl">(${escapeHtml(s.hebrewDob)})</span>`:''}</td>
     </tr>`;}).join('');
   const pref = first.contactPref||{};
   // A standard #10 window envelope's cutout aligns with the LEFT margin of a tri-folded business
@@ -5616,59 +5622,45 @@ function registrationPacketBodyHtml(family){
       ${letterheadHeaderHtml()}
       <h2 style="text-align:center;margin:0 0 8px;">PARENT / STUDENT INFORMATION</h2>
       <h3 style="margin:0 0 3px;">Family Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:33%;"><strong>נאמען / Name:</strong> ${escapeHtml(familyDisplayName)}</td>
-            <td style="${td}width:34%;"><strong>Address:</strong> ${formatAddressForPrint(first.address)}</td>
-            <td style="${td}width:33%;"><strong>Phone (Home):</strong> ${escapeHtml(first.homePhone||'')}</td></tr>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+        <tr>${cell('נאמען / Name', escapeHtml(familyDisplayName), '38%')}${cell('Address', formatAddressForPrint(first.address), '38%')}${cell('Phone (Home)', escapeHtml(first.homePhone||''), '24%')}</tr>
       </table>
       <h3 style="margin:0 0 3px;">Father's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${fa.prefix?`<span dir="auto">${escapeHtml(fa.prefix)}</span> `:''}${escapeHtml(fa.name||'')}</td>
-            <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}${fa.canText===true?' <span class="small muted">(can text)</span>':fa.canText===false?' <span class="small muted">(no text)</span>':''}</td>
-            <td style="${td}width:25%;"><strong>Workplace / Kolel:</strong> ${escapeHtml(fa.workplace||'')}</td>
-            <td style="${td}width:25%;"><strong>Email:</strong> ${escapeHtml(fa.email||'')}</td></tr>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+        <tr>${cell('ערשטע נאמען / First Name', (fa.prefix?`<span dir="auto">${escapeHtml(fa.prefix)}</span> `:'')+escapeHtml(fa.name||''), '30%')}${cell('Workplace / Kolel', escapeHtml(fa.workplace||''), '25%')}${cell('Email', escapeHtml(fa.email||''), '45%')}</tr>
+        <tr>${cell('Cell Phone', escapeHtml(fa.cell||fa.phone||''), '30%')}${cell('Can Text?', canTextLine(fa.canText), '25%')}<td style="padding:5px 10px;border:none;"></td></tr>
       </table>
       <h3 style="margin:0 0 3px;">Mother's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${mo.prefix?`<span dir="auto">${escapeHtml(mo.prefix)}</span> `:''}${escapeHtml(mo.name||'')}${mo.maidenName?` <span class="small muted">(née ${escapeHtml(mo.maidenName)})</span>`:''}</td>
-            <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}${mo.canText===true?' <span class="small muted">(can text)</span>':mo.canText===false?' <span class="small muted">(no text)</span>':''}</td>
-            <td style="${td}width:25%;"><strong>Workplace:</strong> ${escapeHtml(mo.workplace||'')}</td>
-            <td style="${td}width:25%;"><strong>Email:</strong> ${escapeHtml(mo.email||'')}</td></tr>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+        <tr>${cell('ערשטע נאמען / First Name', (mo.prefix?`<span dir="auto">${escapeHtml(mo.prefix)}</span> `:'')+escapeHtml(mo.name||'')+(mo.maidenName?` <span class="small muted">(née ${escapeHtml(mo.maidenName)})</span>`:''), '30%')}${cell('Workplace', escapeHtml(mo.workplace||''), '25%')}${cell('Email', escapeHtml(mo.email||''), '45%')}</tr>
+        <tr>${cell('Cell Phone', escapeHtml(mo.cell||mo.phone||''), '30%')}${cell('Can Text?', canTextLine(mo.canText), '25%')}<td style="padding:5px 10px;border:none;"></td></tr>
       </table>
       <h3 style="margin:0 0 3px;">תלמיד / Student(s) Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <thead><tr style="background:#F1E3EC;"><th style="${td}">ערשטע נאמען / Legal Name</th><th style="${td}">Student ID</th><th style="${td}">כתה / Class</th><th style="${td}">DOB / יום הולדת</th><th style="${td}">Transportation</th></tr></thead>
+        <thead><tr style="background:#F1E3EC;"><th style="padding:5px 10px;border:1px solid #999;">ערשטע נאמען / Legal Name</th><th style="padding:5px 10px;border:1px solid #999;">Student ID</th><th style="padding:5px 10px;border:1px solid #999;">כתה / Class</th><th style="padding:5px 10px;border:1px solid #999;">DOB / יום הולדת</th></tr></thead>
         <tbody>${studentRowsHtml}</tbody>
       </table>
       <h3 style="margin:0 0 3px;">Emergency Contact Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <thead><tr style="background:#F1E3EC;"><th style="${td}">Name</th><th style="${td}">Relationship</th><th style="${td}">Phone</th></tr></thead>
+        <thead><tr style="background:#F1E3EC;"><th style="padding:5px 10px;border:1px solid #999;">Name</th><th style="padding:5px 10px;border:1px solid #999;">Relationship</th><th style="padding:5px 10px;border:1px solid #999;">Phone</th></tr></thead>
         <tbody>
-        <tr><td style="${td}">${escapeHtml(ec1.name||'')||'&nbsp;'}</td><td style="${td}">${escapeHtml(ec1.relationship||'')||'&nbsp;'}</td><td style="${td}">${escapeHtml(ec1.phone||'')||'&nbsp;'}</td></tr>
-        <tr><td style="${td}">${escapeHtml(ec2.name||'')||'&nbsp;'}</td><td style="${td}">${escapeHtml(ec2.relationship||'')||'&nbsp;'}</td><td style="${td}">${escapeHtml(ec2.phone||'')||'&nbsp;'}</td></tr>
+        <tr><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec1.name||'')||'&nbsp;'}</td><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec1.relationship||'')||'&nbsp;'}</td><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec1.phone||'')||'&nbsp;'}</td></tr>
+        <tr><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec2.name||'')||'&nbsp;'}</td><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec2.relationship||'')||'&nbsp;'}</td><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec2.phone||'')||'&nbsp;'}</td></tr>
         </tbody>
       </table>
       <h3 style="margin:0 0 3px;">Medical Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:34%;"><strong>Family Doctor:</strong> ${escapeHtml(med.doctorName||'')||'&nbsp;'}</td>
-            <td style="${td}width:33%;"><strong>Address:</strong> ${med.doctorAddress?formatAddressForPrint(med.doctorAddress):'&nbsp;'}</td>
-            <td style="${td}width:33%;"><strong>Phone:</strong> ${escapeHtml(med.doctorPhone||'')||'&nbsp;'}</td></tr>
-        <tr><td colspan="3" style="${td}"><strong>Medical Comment / Allergies:</strong> ${escapeHtml(medicalComment)||'&nbsp;'}</td></tr>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+        <tr>${cell('Family Doctor', escapeHtml(med.doctorName||''), '34%')}${cell('Address', med.doctorAddress?formatAddressForPrint(med.doctorAddress):'', '33%')}${cell('Phone', escapeHtml(med.doctorPhone||''), '33%')}</tr>
+        <tr><td colspan="3" style="padding:5px 10px;border:1px solid #999;"><div style="font-weight:600;font-size:10px;color:#500F32;margin-bottom:2px;">Medical Comment / Allergies</div><div>${escapeHtml(medicalComment)||'&nbsp;'}</div></td></tr>
       </table>
       <h3 style="margin:0 0 3px;">Grandparent's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:34%;"><strong>Name:</strong> ${escapeHtml(gpP.name||'')||'&nbsp;'} <span class="small muted">(Paternal)</span></td>
-            <td style="${td}width:33%;"><strong>Address:</strong> ${gpP.address?formatAddressForPrint(gpP.address):'&nbsp;'}</td>
-            <td style="${td}width:33%;"><strong>Phone:</strong> ${escapeHtml(gpP.phone||'')||'&nbsp;'}</td></tr>
-        <tr><td style="${td}"><strong>Name:</strong> ${escapeHtml(gpM.name||'')||'&nbsp;'} <span class="small muted">(Maternal)</span></td>
-            <td style="${td}"><strong>Address:</strong> ${gpM.address?formatAddressForPrint(gpM.address):'&nbsp;'}</td>
-            <td style="${td}"><strong>Phone:</strong> ${escapeHtml(gpM.phone||'')||'&nbsp;'}</td></tr>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+        <tr>${cell('Name (Paternal)', escapeHtml(gpP.name||''), '34%')}${cell('Address', gpP.address?formatAddressForPrint(gpP.address):'', '33%')}${cell('Phone', escapeHtml(gpP.phone||''), '33%')}</tr>
+        <tr>${cell('Name (Maternal)', escapeHtml(gpM.name||''), '34%')}${cell('Address', gpM.address?formatAddressForPrint(gpM.address):'', '33%')}${cell('Phone', escapeHtml(gpM.phone||''), '33%')}</tr>
       </table>
-      <h3 style="margin:0 0 3px;">Transportation &amp; Contact Preference</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:50%;"><strong>Pickup/drop-off address, if different from home address above:</strong> ${first.transportAddress?formatAddressForPrint(first.transportAddress):'&nbsp;'}</td>
-            <td style="${td}width:25%;"><strong>Best person to contact:</strong> ${escapeHtml(pref.person||'')||'&nbsp;'}</td>
-            <td style="${td}width:25%;"><strong>Best way to contact:</strong> ${escapeHtml(pref.method||'')||'&nbsp;'}</td></tr>
+      <h3 style="margin:0 0 3px;">Contact Preference</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+        <tr>${cell('Best person to contact', escapeHtml(pref.person||''), '50%')}${cell('Best way to contact', escapeHtml(pref.method||''), '50%')}</tr>
       </table>
       <h3 style="margin:0 0 3px;">Medical Consent</h3>
       <div style="margin-bottom:4px;">I hereby authorize ${escapeHtml(STATE.schoolName)} as our agent to consent to any emergency diagnostic procedure, medical care, or hospital as deemed necessary for the student(s) listed above.</div>
@@ -5827,6 +5819,7 @@ function renderServiceRequirements(){
   if(canLessonPlanRule || canManageTemplates) sections.push({key:'lessonplans', label:'Lesson Plans'});
   if(canLessonPlanRule) sections.push({key:'goals', label:'Goals'});
   if(canManageTemplates) sections.push({key:'reports', label:'Reports & Assessments'});
+  if(isAdmin) sections.push({key:'immunizations', label:'Immunizations'});
   if(!VIEW.svcReqSection || !sections.some(s=>s.key===VIEW.svcReqSection)) VIEW.svcReqSection = sections[0].key;
   const active = VIEW.svcReqSection;
 
@@ -6080,6 +6073,25 @@ function renderServiceRequirements(){
       <td><button class="btn-ghost btn btn-sm" onclick="openTemplateModal('${t.id}')">Edit</button></td></tr>`).join('')}
     </tbody></table>
   </div>` : ''}`,
+
+    immunizations: `${isAdmin? `<div class="card">
+      <h3>Required immunizations</h3>
+      <div class="muted small" style="margin-bottom:8px;">Enter the immunizations your school actually requires and how many doses of each — this list is entirely yours to define and keep current; Ledger has no built-in list of NY State/NYC requirements and doesn't claim to. Each student's own Immunizations card (on their profile) checks against whatever's entered here, and the compliance report below reflects it too.</div>
+      <div class="muted small" style="margin-bottom:8px;background:var(--surface-2);border-radius:8px;padding:8px 10px;">"📋 Load NY State/NYC standard list" fills in the typical on-time full-series dose count for each vaccine required for grades K-12 under NYS Public Health Law §2164 — a starting point, not a guarantee. Actual required doses can differ by a student's exact age at each dose, catch-up schedules, and grade (e.g. meningococcal has its own 12th-grade booster rule this simple dose-count model can't capture), and early childhood/pre-K/day-care programs have additional requirements (Hib, PCV) not included here. Always confirm current requirements directly with NYSDOH/NYC DOHMH — this isn't legal advice.</div>
+      <div id="reqImmzList">${(STATE.requiredImmunizations||[]).map(ri=>`<div style="display:flex;gap:8px;align-items:center;padding:4px 0;">
+        <span style="flex:1;">${escapeHtml(ri.name)}</span><span class="small muted">${ri.requiredDoses} dose${ri.requiredDoses===1?'':'s'}</span>
+        <button class="btn-ghost btn btn-sm" onclick="deleteRequiredImmunization('${ri.id}')">🗑</button>
+      </div>`).join('') || '<div class="muted small">None set up yet.</div>'}</div>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <input id="newImmzName" placeholder="e.g. MMR" style="flex:2;">
+        <input id="newImmzDoses" type="number" min="1" value="1" style="flex:1;max-width:90px;" placeholder="Doses">
+        <button class="btn" onclick="addRequiredImmunization()">+ Add</button>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn-ghost btn btn-sm" onclick="loadStandardImmunizationList()">📋 Load NY State/NYC standard list (K-12)</button>
+        ${(STATE.requiredImmunizations||[]).length? `<button class="btn-ghost btn btn-sm" onclick="openImmunizationComplianceReportModal()">📋 View compliance report</button>` : ''}
+      </div>
+    </div>` : ''}`,
   };
 
   return `
@@ -6096,6 +6108,231 @@ function setApproverByDiscipline(discipline, staffId){
 function setLessonPlanApprover(staffId){
   STATE.lessonPlanApprover = staffId;
   saveState().then(ok=>{ if(ok) toast('Lesson plan approver saved'); });
+}
+// =============== IMMUNIZATIONS ===============
+// Data model:
+//   STATE.requiredImmunizations: [{id, name, requiredDoses}] — entirely school-defined in
+//     Settings → Service Requirements → Immunizations; Ledger has no built-in regulatory list and
+//     makes no claim about what's actually required by any state/city.
+//   student.immunizations: [{id, vaccine, date, source:'manual'|'ai', addedAt, addedBy}] — one
+//     entry per actual recorded dose.
+//   studentDocument entries get an extra immunizationSource:true flag when uploaded through this
+//     feature, so a source file can be told apart from a student's other documents.
+function addRequiredImmunization(){
+  if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
+  const name = document.getElementById('newImmzName').value.trim();
+  const doses = parseInt(document.getElementById('newImmzDoses').value, 10) || 1;
+  if(!name){ toast('Enter a name'); return; }
+  if((STATE.requiredImmunizations||[]).some(r=>r.name.toLowerCase()===name.toLowerCase())){ toast('That one is already on the list'); return; }
+  STATE.requiredImmunizations = [...(STATE.requiredImmunizations||[]), {id:uid('immz'), name, requiredDoses:doses}];
+  saveState(); renderContent(); toast('Added');
+}
+function deleteRequiredImmunization(id){
+  if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
+  STATE.requiredImmunizations = (STATE.requiredImmunizations||[]).filter(r=>r.id!==id);
+  saveState(); renderContent();
+}
+// A starting point, not a source of truth. The real law (NYS Public Health Law §2164, 10 NYCRR
+// Subpart 66-1, enforced in NYC via DOHMH/DOE's SH65 sheet) sets dose counts that shift by the
+// CHILD'S AGE at each dose and by grade — a late start, a catch-up schedule, or an age-11+ grade
+// 6-12 Tdap/meningococcal requirement all change the number that actually applies to one specific
+// student. This app's own compliance model is deliberately simpler (one fixed dose count per
+// vaccine, matched by name), so what's loaded here is the STANDARD on-time full-series count for
+// grades K-12 generally — a reasonable starting list, not a guarantee any individual student's
+// real requirement matches it. Never touches an immunization already on the list (by name), so
+// running this again after adding others of your own is safe. Early childhood/pre-K/day-care
+// programs have additional requirements this list doesn't include (Hib, PCV) — add those
+// yourself if applicable. Always confirm current requirements against NYSDOH/NYC DOHMH directly;
+// this is not legal advice.
+function loadStandardImmunizationList(){
+  if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
+  const standard = [
+    {name:'DTaP/Tdap/Td (Diphtheria, Tetanus, Pertussis)', requiredDoses:5},
+    {name:'Polio (IPV/OPV)', requiredDoses:4},
+    {name:'MMR (Measles, Mumps, Rubella)', requiredDoses:2},
+    {name:'Hepatitis B', requiredDoses:3},
+    {name:'Varicella (Chickenpox)', requiredDoses:2},
+    {name:'Tdap Booster (grades 6-12)', requiredDoses:1},
+    {name:'Meningococcal (MenACWY, grades 7-12)', requiredDoses:1},
+  ];
+  const existingNames = new Set((STATE.requiredImmunizations||[]).map(r=>r.name.toLowerCase()));
+  const toAdd = standard.filter(s=>!existingNames.has(s.name.toLowerCase()));
+  if(!toAdd.length){ toast('The standard list is already fully on your list'); return; }
+  showConfirm(`Add ${toAdd.length} standard NY State/NYC K-12 immunization(s) with their typical on-time full-series dose count — ${toAdd.map(s=>`${s.name} (${s.requiredDoses})`).join(', ')}?\n\nThis is a starting point based on the routine schedule, NOT a substitute for checking current requirements yourself — actual required doses can differ by a student's exact age at each dose, catch-up schedules, and grade (e.g. meningococcal has a 2nd-dose booster rule for 12th grade this simple count doesn't capture). Anything already on your list is left untouched.`, ()=>{
+    STATE.requiredImmunizations = [...(STATE.requiredImmunizations||[]), ...toAdd.map(s=>({id:uid('immz'), name:s.name, requiredDoses:s.requiredDoses}))];
+    saveState(); renderContent();
+    toast(`✓ Added ${toAdd.length} standard immunization(s) — double-check doses against current NYSDOH/NYC DOHMH guidance`);
+  }, 'Add them');
+}
+// For each required immunization, counts how many recorded doses match it BY NAME (case-
+// insensitive, trimmed) and compares against the required dose count. A vaccine name that doesn't
+// match any required immunization's name at all (e.g. a flu shot when only DTaP/MMR are required)
+// simply doesn't show up in the compliance view — it's still saved on the student's own record,
+// just not compliance-relevant.
+function studentImmunizationStatus(student){
+  const required = STATE.requiredImmunizations||[];
+  const records = student.immunizations||[];
+  return required.map(req=>{
+    const matching = records.filter(r=>r.vaccine.trim().toLowerCase()===req.name.trim().toLowerCase());
+    const dosesGiven = matching.length;
+    return { requirement:req, dosesGiven, met: dosesGiven>=req.requiredDoses, records:matching };
+  });
+}
+function renderStudentImmunizationsCard(student){
+  const canEdit = can('editSetup');
+  const status = studentImmunizationStatus(student);
+  const sourceDocs = (STATE.studentDocuments||[]).filter(d=>d.studentId===student.id && d.immunizationSource);
+  const allRecords = (student.immunizations||[]).slice().sort((a,b)=>(a.vaccine||'').localeCompare(b.vaccine||'')||(a.date||'').localeCompare(b.date||''));
+  return `<div class="card">
+    <h3>Immunizations</h3>
+    ${status.length? `<div style="margin-bottom:10px;">${status.map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;">
+      <span>${s.met?'✅':'⚠️'} ${escapeHtml(s.requirement.name)}</span>
+      <span class="small muted">${s.dosesGiven}/${s.requirement.requiredDoses} dose${s.requirement.requiredDoses===1?'':'s'}</span>
+    </div>`).join('')}</div>` : `<div class="muted small" style="margin-bottom:10px;">No required immunizations set up yet — see Service Requirements → Immunizations.</div>`}
+    <div class="small" style="margin:8px 0 4px;font-weight:700;">All doses on file</div>
+    ${allRecords.length? allRecords.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;">
+      <span class="small">${escapeHtml(r.vaccine)} — ${r.date?fmtDate(r.date):'no date on file'}${r.source==='ai'?' <span class="muted" style="font-size:10px;">(AI-extracted)</span>':''}</span>
+      ${canEdit? `<button class="btn-ghost btn btn-sm" style="padding:1px 6px;font-size:11px;" onclick="deleteImmunizationRecord('${student.id}','${r.id}')">✕</button>` : ''}
+    </div>`).join('') : '<div class="muted small">None recorded yet.</div>'}
+    ${sourceDocs.length? `<div class="small" style="margin:8px 0 4px;font-weight:700;">Source document(s)</div>${sourceDocs.map(d=>`<div class="small link" style="padding:1px 0;" onclick="viewStudentDocument('${d.id}')">📄 ${escapeHtml(d.name)}</div>`).join('')}` : ''}
+    ${canEdit? `<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px;">
+      <div class="small muted" style="margin-bottom:6px;">Upload an exported record (e.g. from NYC's Citywide Immunization Registry) and let AI read the doses off it, or add one by hand.</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+        <input type="file" id="immzFile_${student.id}" accept="application/pdf,image/png,image/jpeg" style="max-width:200px;">
+        <button class="btn-ghost btn btn-sm btn-ai" onclick="uploadAndExtractImmunizations('${student.id}')">✨ Upload &amp; read with AI</button>
+      </div>
+      <button class="btn-ghost btn btn-sm" onclick="openManualImmunizationModal('${student.id}')">+ Add a dose manually</button>
+    </div>` : ''}
+  </div>`;
+}
+function deleteImmunizationRecord(studentId, recordId){
+  if(!can('editSetup')){ toast('You do not have permission'); return; }
+  const s = byId(STATE.students, studentId); if(!s) return;
+  s.immunizations = (s.immunizations||[]).filter(r=>r.id!==recordId);
+  saveState(); renderContent();
+}
+function openManualImmunizationModal(studentId){
+  if(!can('editSetup')){ toast('You do not have permission'); return; }
+  showModal(`<h3>Add an immunization dose</h3>
+    <div class="form-row"><label>Vaccine <span class="small">(match a required immunization's exact name so it counts toward compliance, e.g. "MMR")</span></label><input id="immzVaccine" list="reqImmzNames"><datalist id="reqImmzNames">${(STATE.requiredImmunizations||[]).map(r=>`<option value="${escapeHtml(r.name)}">`).join('')}</datalist></div>
+    <div class="form-row"><label>Date given</label><input type="date" id="immzDate"></div>
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Cancel</button><button class="btn" onclick="saveManualImmunization('${studentId}')">Save</button></div>`);
+}
+function saveManualImmunization(studentId){
+  const s = byId(STATE.students, studentId); if(!s) return;
+  const vaccine = document.getElementById('immzVaccine').value.trim();
+  const date = document.getElementById('immzDate').value;
+  if(!vaccine){ toast('Enter a vaccine name'); return; }
+  s.immunizations = s.immunizations||[];
+  s.immunizations.push({id:uid('dose'), vaccine, date, source:'manual', addedAt:new Date().toISOString(), addedBy:VIEW.userId});
+  saveState(); closeModal(); renderContent(); toast('Added');
+}
+// Uploads the file as a regular student document (tagged immunizationSource so it's identifiable
+// later), then asks Claude to read the actual doses off it. This is explicitly a fast first pass,
+// not a certified reading — a scanned record with a faded date or an oddly formatted table can
+// genuinely get misread, and this affects something that can gate a child's ability to attend
+// school, so every extracted entry is shown for review/edit/removal BEFORE anything is saved to
+// the student's real record. Nothing here is ever auto-saved from the AI's output directly.
+async function uploadAndExtractImmunizations(studentId){
+  if(!can('editSetup')){ toast('You do not have permission'); return; }
+  const input = document.getElementById('immzFile_'+studentId);
+  const file = input && input.files && input.files[0];
+  if(!file){ toast('Choose a file first'); return; }
+  if(file.size > 4*1024*1024){ toast('Please use a file under about 4MB'); return; }
+  toast('Uploading and reading the document…');
+  const reader = new FileReader();
+  reader.onload = async ()=>{
+    const dataUrl = reader.result;
+    const docId = uid('doc');
+    const uploadRes = await backendSaveStudentDocument(docId, dataUrl, {studentId, name:file.name, year:STATE.currentYear, immunizationSource:true});
+    if(!uploadRes.ok){ toast((uploadRes.body&&uploadRes.body.error)||'Could not upload the document'); return; }
+    STATE.studentDocuments.push(uploadRes.body.entry);
+    markKeysSynced(['studentDocuments']);
+    input.value = '';
+    try{
+      const mime = (dataUrl.match(/data:([^;]+)/)||[])[1] || '';
+      const base64 = dataUrl.split(',')[1];
+      if(!mime.startsWith('image/') && mime!=='application/pdf'){ toast('Uploaded — but AI can only read image or PDF files, add doses manually instead'); renderContent(); return; }
+      const contentBlock = mime==='application/pdf'
+        ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
+        : {type:'image', source:{type:'base64', media_type:mime, data:base64}};
+      const data = await callClaudeAPI({ model:'claude-sonnet-5', max_tokens:1500, messages:[{role:'user', content:[
+        contentBlock,
+        {type:'text', text:`This is an immunization/vaccination record for a student. Extract every individual dose actually listed — the vaccine name as written (don't rename or standardize it) and the date it was given (YYYY-MM-DD; if only a partial date is legible, use whatever you can read and note the rest as unclear in a "note" field). Return ONLY a raw JSON array, no markdown fences, no other text, in exactly this shape: [{"vaccine":"MMR","date":"2019-03-14","note":""},{"vaccine":"DTaP","date":"","note":"date illegible, only year 2018 visible"}]. If you can't read the document at all or it isn't an immunization record, return an empty array.`}
+      ]}]});
+      const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+      let doses; try{ doses = JSON.parse(text.replace(/```json|```/g,'').trim()); }catch(e){ doses = []; }
+      if(!Array.isArray(doses)) doses = [];
+      renderContent();
+      openImmunizationReviewModal(studentId, docId, doses);
+    }catch(e){
+      console.error(e);
+      renderContent();
+      toast('Uploaded, but AI reading failed — add doses manually instead, or try again');
+    }
+  };
+  reader.onerror = ()=>toast('Could not read that file');
+  reader.readAsDataURL(file);
+}
+// The mandatory review step — every AI-extracted dose is shown here, editable inline, with a
+// checkbox to exclude any that look wrong, before "Save reviewed doses" actually writes anything
+// to the student's real immunization record. Closing this without saving discards the extraction
+// entirely (the uploaded document itself stays saved either way, so nothing is lost — only the
+// AI's reading of it, which can just be re-run).
+function openImmunizationReviewModal(studentId, docId, doses){
+  if(!doses.length){
+    showModal(`<h3>Nothing readable found</h3><p style="margin:10px 0;">AI couldn't confidently read any doses off that document. The file itself is still saved — you can review it yourself and add doses manually, or try the AI reading again.</p><div class="modal-actions"><button class="btn" onclick="closeModal()">OK</button></div>`);
+    return;
+  }
+  showModal(`<h3>Review AI-extracted doses</h3>
+    <div class="small muted" style="margin-bottom:10px;">This is a fast first pass, not a certified reading — check each one against the actual document before saving. Uncheck anything wrong or uncertain.</div>
+    <div id="immzReviewRows">${doses.map((d,i)=>`<div style="display:flex;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);" data-idx="${i}">
+      <input type="checkbox" class="immzReviewCb" checked>
+      <input class="immzReviewVaccine" value="${escapeHtml(d.vaccine||'')}" style="flex:2;" placeholder="Vaccine">
+      <input type="date" class="immzReviewDate" value="${d.date||''}" style="flex:1;">
+    </div>${d.note? `<div class="small muted" style="margin:2px 0 6px 26px;">⚠ ${escapeHtml(d.note)}</div>` : ''}`).join('')}</div>
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Discard</button><button class="btn" onclick="saveReviewedImmunizations('${studentId}')">Save reviewed doses</button></div>`);
+}
+function saveReviewedImmunizations(studentId){
+  const s = byId(STATE.students, studentId); if(!s) return;
+  const rows = [...document.querySelectorAll('#immzReviewRows > div[data-idx]')];
+  let added = 0;
+  s.immunizations = s.immunizations||[];
+  rows.forEach(row=>{
+    if(!row.querySelector('.immzReviewCb').checked) return;
+    const vaccine = row.querySelector('.immzReviewVaccine').value.trim();
+    if(!vaccine) return;
+    const date = row.querySelector('.immzReviewDate').value;
+    s.immunizations.push({id:uid('dose'), vaccine, date, source:'ai', addedAt:new Date().toISOString(), addedBy:VIEW.userId});
+    added++;
+  });
+  saveState(); closeModal(); renderContent();
+  toast(added? `Saved ${added} dose(s)` : 'Nothing was checked to save');
+}
+// The "what's missing" report — every student against every required immunization, in one place.
+// Purely mechanical against STATE.requiredImmunizations and each student's own immunizations
+// array; carries the same "review before trusting" caveat as everywhere else in this feature,
+// since some fraction of the underlying doses may have come from an AI reading of a scanned
+// document rather than being typed in by a person who verified it directly.
+function renderImmunizationComplianceReport(){
+  const required = STATE.requiredImmunizations||[];
+  if(!required.length) return `<div class="empty-state">Set up required immunizations first (Service Requirements → Immunizations).</div>`;
+  const students = studentsOfYear();
+  const rows = students.map(s=>({student:s, status:studentImmunizationStatus(s)}));
+  const incomplete = rows.filter(r=>r.status.some(s=>!s.met));
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <h3 style="margin:0;">Immunization compliance</h3>
+      <span class="small muted">${rows.length-incomplete.length} of ${rows.length} fully compliant</span>
+    </div>
+    <div class="small muted" style="margin-bottom:10px;">Checked against: ${required.map(r=>`${escapeHtml(r.name)} (${r.requiredDoses})`).join(', ')}. Some doses may come from an AI reading of a scanned document — verify before treating a "missing" flag as final.</div>
+    <table><thead><tr><th>Student</th>${required.map(r=>`<th>${escapeHtml(r.name)}</th>`).join('')}</tr></thead><tbody>
+      ${incomplete.length? incomplete.map(r=>`<tr><td><span class="link" onclick="VIEW.tab='students';VIEW.profileStudent='${r.student.id}';render();">${escapeHtml(r.student.name)}</span></td>${r.status.map(s=>`<td>${s.met?'✅':`⚠️ ${s.dosesGiven}/${s.requirement.requiredDoses}`}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${required.length+1}" class="muted">Everyone is fully compliant.</td></tr>`}
+    </tbody></table>
+  </div>`;
+}
+function openImmunizationComplianceReportModal(){
+  showModal(`${renderImmunizationComplianceReport()}<div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
 }
 function renderDefaultActivitiesList(){
   const list = STATE.defaultGroupActivities||[];
@@ -7775,6 +8012,24 @@ async function backfillHebrewDobs(){
     renderContent();
     toast(`✓ Filled in/corrected ${updated} Yiddish DOB(s)${failed?`, ${failed} failed — try again for those, or fix an invalid DOB first`:''}`);
   }, 'Look them up');
+}
+// Student ID is deliberately your OWN school-assigned number (see its field hint in
+// openStudentModal) — stable across years, unlike the internal record id — so generating one
+// scans EVERY student in STATE, not just the current year, to make sure a brand-new number here
+// can never collide with one already assigned to a student from an earlier year. Never touches a
+// student who already has one; only ever fills in the gap for someone who has none at all.
+function generateMissingStudentIds(){
+  const missing = STATE.students.filter(s=>!s.studentIdNumber || !String(s.studentIdNumber).trim());
+  if(!missing.length){ toast('Every student already has a Student ID'); return; }
+  const existingNumbers = STATE.students.map(s=>parseInt(s.studentIdNumber,10)).filter(n=>!isNaN(n));
+  const start = existingNumbers.length ? Math.max(...existingNumbers)+1 : 1001;
+  showConfirm(`Assign a new Student ID to ${missing.length} student(s) who don't have one yet, starting at ${start} and counting up? This never changes anyone who already has one.`, ()=>{
+    let next = start;
+    missing.forEach(s=>{ s.studentIdNumber = String(next++); });
+    saveState(true, null, ['students']);
+    renderContent();
+    toast(`✓ Assigned Student IDs ${start}–${next-1} to ${missing.length} student(s)`);
+  }, 'Assign IDs');
 }
 function openStudentModal(id){
   // A "new student" default can be pre-filled from an AI-read completed registration form (see
