@@ -5586,22 +5586,29 @@ function registrationPacketBodyHtml(family){
   const gp = first.grandparents||{}; const gpP = gp.paternal||{}, gpM = gp.maternal||{};
   const letterBody = personalizedRegistrationLetterHtml(first);
   const medicalComment = [med.comment, ...family.students.map(s=>s.allergies)].filter(Boolean).join('; ');
-  // A "label above, value below" cell — instead of cramming a bilingual label and its value onto
-  // one line (which wrapped badly for anything long, like a formal salutation or a name with a
-  // prefix) — reads like an actual form and never fights with the value for space. `w` is a CSS
-  // width string (e.g. "33%"); omit it to let the cell size naturally (used for the 4-across
-  // Father's/Mother's rows, where all four columns share the row evenly by default).
-  const cell = (label, value, w) => `<td style="padding:5px 10px;border:1px solid #999;vertical-align:top;${w?`width:${w};`:''}"><div style="font-weight:600;font-size:10px;color:#500F32;margin-bottom:2px;">${label}</div><div>${value||'&nbsp;'}</div></td>`;
-  const canTextLine = (canText) => canText===true? 'Yes' : canText===false? 'No' : '&nbsp;';
+  // ONE cell style, used for every box AND every table header on this page — a "form field" box
+  // (label small-caps in the school's own maroon above, the actual value below it) and a table
+  // header cell use the exact same padding/border/label treatment, so every answer on the page
+  // reads the same way regardless of which table it's in. Padding, font sizes, and margins here
+  // are all deliberately tight — this whole Family/Father/Mother/Student/Emergency/Medical/
+  // Grandparents/Consent form is meant to fit on ONE printed page, not spill onto a second.
+  const PAD = '3px 8px';
+  const LABEL = 'font-weight:700;font-size:8.5px;text-transform:uppercase;letter-spacing:.02em;color:#500F32;line-height:1.3;';
+  const cell = (label, value, w) => `<td style="padding:${PAD};border:1px solid #999;vertical-align:top;${w?`width:${w};`:''}"><div style="${LABEL}">${label}</div><div style="line-height:1.25;">${value||'&nbsp;'}</div></td>`;
+  const th = (label) => `<th style="padding:${PAD};border:1px solid #999;background:#F1E3EC;text-align:left;${LABEL}">${label}</th>`;
+  const td = (value) => `<td style="padding:${PAD};border:1px solid #999;line-height:1.25;">${value||'&nbsp;'}</td>`;
+  const h3 = (label) => `<h3 style="margin:5px 0 2px;font-size:12px;">${label}</h3>`;
+  // Cell Phone and Can Text share ONE box (two lines within it) instead of each getting a
+  // separate row — the row that added made the whole page a full extra row taller per parent,
+  // which was the single biggest reason this page had started spilling onto a second sheet.
+  const phoneWithCanText = (phone, canText) => {
+    const line = canText===true? 'Can text: Yes' : canText===false? 'Can text: No' : '';
+    return `${escapeHtml(phone||'')||'&nbsp;'}${line?`<div class="small muted" style="font-size:9px;">${line}</div>`:''}`;
+  };
   const studentRowsHtml = family.students.map(s=>{
     const yiddish = s.yiddishName ? ` (${escapeHtml([s.yiddishName, s.yiddishLastName].filter(Boolean).join(' '))})` : '';
-    return `
-    <tr>
-      <td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(s.name)}${yiddish}</td>
-      <td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(s.studentIdNumber||'')||'&nbsp;'}</td>
-      <td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(className(s.classId))}</td>
-      <td style="padding:5px 10px;border:1px solid #999;">${s.dob?fmtDate(s.dob):''}${s.hebrewDob?` <span dir="rtl">(${escapeHtml(s.hebrewDob)})</span>`:''}</td>
-    </tr>`;}).join('');
+    return `<tr>${td(escapeHtml(s.name)+yiddish)}${td(escapeHtml(s.studentIdNumber||''))}${td(escapeHtml(className(s.classId)))}${td((s.dob?fmtDate(s.dob):'')+(s.hebrewDob?` <span dir="rtl">(${escapeHtml(s.hebrewDob)})</span>`:''))}</tr>`;
+  }).join('');
   const pref = first.contactPref||{};
   // A standard #10 window envelope's cutout aligns with the LEFT margin of a tri-folded business
   // letter (not indented toward the center/right) — the window sits low enough on the envelope
@@ -5618,53 +5625,51 @@ function registrationPacketBodyHtml(family){
       ${mailingAddressBlockHtml}
       <div style="margin-top:0.4in;">${letterBody}</div>
     </div>
-    <div style="page-break-before:always;font-size:12px;padding:0 0.3in;">
+    <div style="page-break-before:always;font-size:11px;padding:0 0.3in;">
       ${letterheadHeaderHtml()}
-      <h2 style="text-align:center;margin:0 0 8px;">PARENT / STUDENT INFORMATION</h2>
-      <h3 style="margin:0 0 3px;">Family Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+      <h2 style="text-align:center;margin:0 0 6px;font-size:16px;">PARENT / STUDENT INFORMATION</h2>
+      ${h3('Family Information')}
+      <table style="width:100%;border-collapse:collapse;margin-bottom:5px;table-layout:fixed;">
         <tr>${cell('נאמען / Name', escapeHtml(familyDisplayName), '38%')}${cell('Address', formatAddressForPrint(first.address), '38%')}${cell('Phone (Home)', escapeHtml(first.homePhone||''), '24%')}</tr>
       </table>
-      <h3 style="margin:0 0 3px;">Father's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
-        <tr>${cell('ערשטע נאמען / First Name', (fa.prefix?`<span dir="auto">${escapeHtml(fa.prefix)}</span> `:'')+escapeHtml(fa.name||''), '30%')}${cell('Workplace / Kolel', escapeHtml(fa.workplace||''), '25%')}${cell('Email', escapeHtml(fa.email||''), '45%')}</tr>
-        <tr>${cell('Cell Phone', escapeHtml(fa.cell||fa.phone||''), '30%')}${cell('Can Text?', canTextLine(fa.canText), '25%')}<td style="padding:5px 10px;border:none;"></td></tr>
+      ${h3("Father's Information")}
+      <table style="width:100%;border-collapse:collapse;margin-bottom:5px;table-layout:fixed;">
+        <tr>${cell('ערשטע נאמען / First Name', (fa.prefix?`<span dir="auto">${escapeHtml(fa.prefix)}</span> `:'')+escapeHtml(fa.name||''), '28%')}${cell('Cell Phone', phoneWithCanText(fa.cell||fa.phone, fa.canText), '22%')}${cell('Workplace / Kolel', escapeHtml(fa.workplace||''), '22%')}${cell('Email', escapeHtml(fa.email||''), '28%')}</tr>
       </table>
-      <h3 style="margin:0 0 3px;">Mother's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
-        <tr>${cell('ערשטע נאמען / First Name', (mo.prefix?`<span dir="auto">${escapeHtml(mo.prefix)}</span> `:'')+escapeHtml(mo.name||'')+(mo.maidenName?` <span class="small muted">(née ${escapeHtml(mo.maidenName)})</span>`:''), '30%')}${cell('Workplace', escapeHtml(mo.workplace||''), '25%')}${cell('Email', escapeHtml(mo.email||''), '45%')}</tr>
-        <tr>${cell('Cell Phone', escapeHtml(mo.cell||mo.phone||''), '30%')}${cell('Can Text?', canTextLine(mo.canText), '25%')}<td style="padding:5px 10px;border:none;"></td></tr>
+      ${h3("Mother's Information")}
+      <table style="width:100%;border-collapse:collapse;margin-bottom:5px;table-layout:fixed;">
+        <tr>${cell('ערשטע נאמען / First Name', (mo.prefix?`<span dir="auto">${escapeHtml(mo.prefix)}</span> `:'')+escapeHtml(mo.name||'')+(mo.maidenName?` <span class="small muted">(née ${escapeHtml(mo.maidenName)})</span>`:''), '28%')}${cell('Cell Phone', phoneWithCanText(mo.cell||mo.phone, mo.canText), '22%')}${cell('Workplace', escapeHtml(mo.workplace||''), '22%')}${cell('Email', escapeHtml(mo.email||''), '28%')}</tr>
       </table>
-      <h3 style="margin:0 0 3px;">תלמיד / Student(s) Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <thead><tr style="background:#F1E3EC;"><th style="padding:5px 10px;border:1px solid #999;">ערשטע נאמען / Legal Name</th><th style="padding:5px 10px;border:1px solid #999;">Student ID</th><th style="padding:5px 10px;border:1px solid #999;">כתה / Class</th><th style="padding:5px 10px;border:1px solid #999;">DOB / יום הולדת</th></tr></thead>
+      ${h3('תלמיד / Student(s) Information')}
+      <table style="width:100%;border-collapse:collapse;margin-bottom:5px;">
+        <thead><tr>${th('ערשטע נאמען / Legal Name')}${th('Student ID')}${th('כתה / Class')}${th('DOB / יום הולדת')}</tr></thead>
         <tbody>${studentRowsHtml}</tbody>
       </table>
-      <h3 style="margin:0 0 3px;">Emergency Contact Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <thead><tr style="background:#F1E3EC;"><th style="padding:5px 10px;border:1px solid #999;">Name</th><th style="padding:5px 10px;border:1px solid #999;">Relationship</th><th style="padding:5px 10px;border:1px solid #999;">Phone</th></tr></thead>
+      ${h3('Emergency Contact Information')}
+      <table style="width:100%;border-collapse:collapse;margin-bottom:5px;">
+        <thead><tr>${th('Name')}${th('Relationship')}${th('Phone')}</tr></thead>
         <tbody>
-        <tr><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec1.name||'')||'&nbsp;'}</td><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec1.relationship||'')||'&nbsp;'}</td><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec1.phone||'')||'&nbsp;'}</td></tr>
-        <tr><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec2.name||'')||'&nbsp;'}</td><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec2.relationship||'')||'&nbsp;'}</td><td style="padding:5px 10px;border:1px solid #999;">${escapeHtml(ec2.phone||'')||'&nbsp;'}</td></tr>
+        <tr>${td(escapeHtml(ec1.name||''))}${td(escapeHtml(ec1.relationship||''))}${td(escapeHtml(ec1.phone||''))}</tr>
+        <tr>${td(escapeHtml(ec2.name||''))}${td(escapeHtml(ec2.relationship||''))}${td(escapeHtml(ec2.phone||''))}</tr>
         </tbody>
       </table>
-      <h3 style="margin:0 0 3px;">Medical Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+      ${h3('Medical Information')}
+      <table style="width:100%;border-collapse:collapse;margin-bottom:5px;table-layout:fixed;">
         <tr>${cell('Family Doctor', escapeHtml(med.doctorName||''), '34%')}${cell('Address', med.doctorAddress?formatAddressForPrint(med.doctorAddress):'', '33%')}${cell('Phone', escapeHtml(med.doctorPhone||''), '33%')}</tr>
-        <tr><td colspan="3" style="padding:5px 10px;border:1px solid #999;"><div style="font-weight:600;font-size:10px;color:#500F32;margin-bottom:2px;">Medical Comment / Allergies</div><div>${escapeHtml(medicalComment)||'&nbsp;'}</div></td></tr>
+        <tr><td colspan="3" style="padding:${PAD};border:1px solid #999;vertical-align:top;"><div style="${LABEL}">Medical Comment / Allergies</div><div style="line-height:1.25;">${escapeHtml(medicalComment)||'&nbsp;'}</div></td></tr>
       </table>
-      <h3 style="margin:0 0 3px;">Grandparent's Information</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+      ${h3("Grandparent's Information")}
+      <table style="width:100%;border-collapse:collapse;margin-bottom:5px;table-layout:fixed;">
         <tr>${cell('Name (Paternal)', escapeHtml(gpP.name||''), '34%')}${cell('Address', gpP.address?formatAddressForPrint(gpP.address):'', '33%')}${cell('Phone', escapeHtml(gpP.phone||''), '33%')}</tr>
         <tr>${cell('Name (Maternal)', escapeHtml(gpM.name||''), '34%')}${cell('Address', gpM.address?formatAddressForPrint(gpM.address):'', '33%')}${cell('Phone', escapeHtml(gpM.phone||''), '33%')}</tr>
       </table>
-      <h3 style="margin:0 0 3px;">Contact Preference</h3>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;table-layout:fixed;">
+      ${h3('Contact Preference')}
+      <table style="width:100%;border-collapse:collapse;margin-bottom:5px;table-layout:fixed;">
         <tr>${cell('Best person to contact', escapeHtml(pref.person||''), '50%')}${cell('Best way to contact', escapeHtml(pref.method||''), '50%')}</tr>
       </table>
-      <h3 style="margin:0 0 3px;">Medical Consent</h3>
-      <div style="margin-bottom:4px;">I hereby authorize ${escapeHtml(STATE.schoolName)} as our agent to consent to any emergency diagnostic procedure, medical care, or hospital as deemed necessary for the student(s) listed above.</div>
-      <div style="margin-bottom:10px;">Child may be given OTC pain relief medication: ${first.otcMedicationAllowed===true?'☒':'☐'} Yes &nbsp; ${first.otcMedicationAllowed===false?'☒':'☐'} No</div>
+      ${h3('Medical Consent')}
+      <div style="margin-bottom:3px;">I hereby authorize ${escapeHtml(STATE.schoolName)} as our agent to consent to any emergency diagnostic procedure, medical care, or hospital as deemed necessary for the student(s) listed above.</div>
+      <div style="margin-bottom:8px;">Child may be given OTC pain relief medication: ${first.otcMedicationAllowed===true?'☒':'☐'} Yes &nbsp; ${first.otcMedicationAllowed===false?'☒':'☐'} No</div>
       <div style="display:flex;gap:40px;">
         <div style="flex:1;">Parent Signature: _________________________</div>
         <div style="flex:1;">Date: _________________________</div>
