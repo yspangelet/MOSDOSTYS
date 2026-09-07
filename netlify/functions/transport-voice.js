@@ -201,14 +201,51 @@ async function reverseGeocodeServer(apiKey, lat, lng) {
 // one-way streets), and progress should only ever reflect what the driver has actually confirmed,
 // never a guess from where the dot happens to be sitting on a map. Returns null if nothing has
 // been checked in yet today.
+//
+// Counts a PRESENT/boarded mark only — never an absent mark — toward "how far the bus has
+// actually gotten." A rider can be marked absent from anywhere, at any time after the route
+// starts (a parent calling ahead ten minutes into the run to say their child isn't coming), which
+// is not evidence the driver has physically reached that rider's stop yet. Treating an absent
+// mark the same as a real board/drop-off used to let a single early absence call jump the whole
+// route's reported progress straight to that rider's stop number — telling every family at an
+// earlier, not-yet-reached stop that they'd "already been picked up." See
+// fullyAbsentStopsBetween below for how an absent-only stop the bus hasn't reached yet is still
+// surfaced, just as its own separate fact rather than as false progress.
 function currentStopProgress(orderedStops, log, studentsByStopId) {
   let loggedIdx = -1;
   orderedStops.forEach((s, i) => {
     const ridersHere = studentsByStopId[s.id] || [];
-    if (ridersHere.some((studentId) => log[studentId])) loggedIdx = i;
+    if (ridersHere.some((studentId) => log[studentId] && log[studentId].status !== 'absent')) loggedIdx = i;
   });
   if (loggedIdx < 0) return null;
   return { idx: loggedIdx };
+}
+// Stops strictly between the last real present-confirmed stop and some later point (a caller's
+// own stop, or the end of the route for the admin summary) where EVERY rider assigned there has
+// been marked absent — meaning the driver will never generate a present confirmation for that
+// stop at all, since there's genuinely no one there to pick up. Only reported once every rider at
+// a stop is accounted for as absent; a stop with one absent rider and one still-unmarked rider is
+// left alone here; the confirmation the second rider gets is exactly this function's caller.
+function fullyAbsentStopsBetween(orderedStops, log, studentsByStopId, fromIdxExclusive, toIdxInclusive) {
+  const out = [];
+  for (let i = fromIdxExclusive + 1; i <= toIdxInclusive; i++) {
+    const s = orderedStops[i];
+    const riders = studentsByStopId[s.id] || [];
+    if (riders.length && riders.every((studentId) => log[studentId] && log[studentId].status === 'absent')) {
+      out.push({ idx: i, stop: s });
+    }
+  }
+  return out;
+}
+// Turns a list from fullyAbsentStopsBetween into the sentence(s) actually spoken — "Stop number 5
+// is absent today." for one, or "Stops number 5 and 7 are absent today." for more than one, so
+// this reads the same whether it's mentioning one skipped stop or several.
+function absentStopsSentence(fullyAbsent) {
+  if (!fullyAbsent.length) return '';
+  const nums = fullyAbsent.map((f) => f.idx + 1);
+  if (nums.length === 1) return ` Stop number ${nums[0]} is absent today.`;
+  const last = nums[nums.length - 1];
+  return ` Stops number ${nums.slice(0, -1).join(', ')} and ${last} are absent today.`;
 }
 // Mirrors isLegCompleted in index.html exactly — true once a driver has actually pressed "✅ Mark
 // route complete" (or a Custom Trip's equivalent) for this specific leg today, not just inferred
@@ -349,7 +386,13 @@ async function studentStatusText(student, state, dateISO, dayAbbr, minutes) {
   if (myStopNum === busStopNum) {
     return `The route is now at stop number ${busStopNum}, which is ${student.name}'s stop.${liveNote}`;
   }
-  return `The route is now after stop number ${busStopNum}. ${student.name}'s stop is number ${myStopNum}.${liveNote}`;
+  // The caller's own stop is still ahead of the last real confirmation — but any stop in between
+  // that's already fully resolved as absent (every rider there marked absent, so the driver will
+  // never generate a real board/drop-off confirmation for it) is worth saying outright, rather
+  // than just silently sitting between "after stop 4" and "your stop is 6" with no explanation
+  // for why stop 5 never separately gets its own "already picked up" mention.
+  const skipped = fullyAbsentStopsBetween(orderedStops, log, studentsByStopId, progress.idx, myIdx);
+  return `The route is now after stop number ${busStopNum}.${absentStopsSentence(skipped)} ${student.name}'s stop is number ${myStopNum}.${liveNote}`;
 }
 
 // ---------- Custom Routes (one-time/repeating trips, not tied to the am/pm route model) ----------
@@ -447,7 +490,10 @@ async function tripStopStatusText(trip, stop, state, dateISO) {
   if (myStopNum === busStopNum) {
     return `The route is now at stop number ${busStopNum}, which is ${riderLabel}'s stop.${liveNote}`;
   }
-  return `The route is now after stop number ${busStopNum}. ${riderLabel}'s stop is number ${myStopNum}.${liveNote}`;
+  // Same "explain the skipped stop rather than leave it a silent gap" fix as the regular-route
+  // version above — see fullyAbsentStopsBetween/absentStopsSentence.
+  const skipped = fullyAbsentStopsBetween(orderedStops, pseudoLog, studentsByStopId, progress.idx, myIdx);
+  return `The route is now after stop number ${busStopNum}.${absentStopsSentence(skipped)} ${riderLabel}'s stop is number ${myStopNum}.${liveNote}`;
 }
 
 // The admin-PIN summary reports a REGULAR ROUTE's own overall status — not tied to any one
@@ -478,7 +524,11 @@ async function routeStatusText(route, dir, state, dateISO) {
     if (!isLegStartedServer(state, dateISO, key)) return `${route.name}, ${legLabel}: has not started yet.`;
     return `${route.name}, ${legLabel}: started, now before stop number 1.${liveNote}`;
   }
-  return `${route.name}, ${legLabel}: now after stop number ${progress.idx + 1} of ${orderedStops.length}.${liveNote}`;
+  // Reports absent stops across the WHOLE rest of the route, not just up to some one caller's own
+  // stop (there is no "own stop" for this admin-wide summary) — every stop the driver will never
+  // generate a real confirmation for, because everyone assigned there is already marked absent.
+  const skipped = fullyAbsentStopsBetween(orderedStops, log, studentsByStopId, progress.idx, orderedStops.length - 1);
+  return `${route.name}, ${legLabel}: now after stop number ${progress.idx + 1} of ${orderedStops.length}.${absentStopsSentence(skipped)}${liveNote}`;
 }
 // Every active regular route's current AM or PM leg (whichever the school-day clock says is
 // "now" — see currentDirection), in one call — the admin PIN's whole reason to exist: a real
