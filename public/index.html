@@ -5486,7 +5486,7 @@ function registrationLetterHtml(){
 // every other family. Case-insensitive so "{{parents}}" typed by hand still works.
 function personalizedRegistrationLetterHtml(student){
   const salutation = student ? studentParentSalutationFormal(student) : 'Parents';
-  return registrationLetterHtml().replace(/\{\{\s*parents\s*\}\}/gi, escapeHtml(salutation));
+  return registrationLetterHtml().replace(/\{\{\s*parents\s*\}\}/gi, `<span dir="auto">${escapeHtml(salutation)}</span>`);
 }
 function saveRegistrationLetterText(){
   if(!canManageRegistration()){ toast('You do not have permission to edit this'); return; }
@@ -5500,7 +5500,8 @@ function saveRegistrationLetterText(){
 // leaving is what would make execCommand act on nothing, or on whatever was selected before).
 function registrationLetterToolbarHtml(){
   const btn = (cmd, label, title) => `<button type="button" class="btn-ghost btn btn-sm" title="${escapeHtml(title)}" onmousedown="event.preventDefault();document.execCommand('${cmd}');">${label}</button>`;
-  return `<div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;">
+  const fonts = ['Arial','Georgia','Times New Roman','Courier New','Tahoma','Verdana','David','Miriam','FrankRuehl','Arial Hebrew'];
+  return `<div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
     ${btn('bold','<b>B</b>','Bold')}
     ${btn('italic','<i>I</i>','Italic')}
     ${btn('underline','<u>U</u>','Underline')}
@@ -5508,8 +5509,41 @@ function registrationLetterToolbarHtml(){
     ${btn('justifyCenter','⬌','Center')}
     ${btn('justifyRight','➡','Align right')}
     ${btn('insertUnorderedList','• List','Bullet list')}
+    <span style="width:1px;height:20px;background:var(--line);margin:0 2px;"></span>
+    <button type="button" class="btn-ghost btn btn-sm" title="Right-to-left (for Hebrew/Yiddish paragraphs)" onmousedown="event.preventDefault();document.execCommand('rtl');">⇤ RTL</button>
+    <button type="button" class="btn-ghost btn btn-sm" title="Left-to-right (for English paragraphs)" onmousedown="event.preventDefault();document.execCommand('ltr');">RTL ⇥</button>
+    <span style="width:1px;height:20px;background:var(--line);margin:0 2px;"></span>
+    <select onmousedown="regLetterSaveSelection()" onchange="applyRegLetterFont(this.value)" style="width:auto;font-size:13px;padding:2px 4px;" title="Font">
+      <option value="">Font…</option>
+      ${fonts.map(f=>`<option value="${escapeHtml(f)}" style="font-family:'${escapeHtml(f)}';">${escapeHtml(f)}</option>`).join('')}
+    </select>
     <button type="button" class="btn-ghost btn btn-sm" title="Remove formatting" onmousedown="event.preventDefault();document.execCommand('removeFormat');">Clear formatting</button>
   </div>`;
+}
+// A native <select> necessarily steals focus (and with it, the browser's text selection) the
+// moment it's clicked — unlike the other toolbar buttons above, which use onmousedown +
+// preventDefault to never take focus away from the editor at all. So the font picker instead
+// saves the current selection on mousedown (right before focus moves to the dropdown), then
+// restores that exact selection just before applying the font, so choosing a font actually
+// affects the text that was selected rather than wherever the cursor happens to land afterward.
+let regLetterSavedRange = null;
+function regLetterSaveSelection(){
+  const sel = window.getSelection();
+  const editor = document.getElementById('regLetterEditor');
+  if(sel && sel.rangeCount>0 && editor && editor.contains(sel.getRangeAt(0).commonAncestorContainer)){
+    regLetterSavedRange = sel.getRangeAt(0).cloneRange();
+  }
+}
+function applyRegLetterFont(fontName){
+  if(!fontName) return;
+  const editor = document.getElementById('regLetterEditor');
+  if(editor) editor.focus();
+  if(regLetterSavedRange){
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(regLetterSavedRange);
+  }
+  document.execCommand('fontName', false, fontName);
 }
 function saveDashboardComplianceWidgets(){
   if(currentStaff().role!=='Admin'){ toast('Admin only'); return; }
@@ -5557,7 +5591,7 @@ function registrationPacketBodyHtml(family){
     </tr>`;}).join('');
   return `
     <div dir="auto" style="margin-bottom:24px;line-height:1.6;">${letterBody}</div>
-    <div style="page-break-before:always;font-size:12px;padding:0 0.4in;">
+    <div style="page-break-before:always;font-size:12px;padding:0 0.65in;">
       ${letterheadHeaderHtml()}
       <h2 style="text-align:center;margin:0 0 8px;">PARENT / STUDENT INFORMATION</h2>
       <h3 style="margin:0 0 3px;">Family Information</h3>
@@ -5568,14 +5602,14 @@ function registrationPacketBodyHtml(family){
       </table>
       <h3 style="margin:0 0 3px;">Father's Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${escapeHtml(fa.name||'')}</td>
+        <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${fa.prefix?`<span dir="auto">${escapeHtml(fa.prefix)}</span> `:''}${escapeHtml(fa.name||'')}</td>
             <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}</td>
             <td style="${td}width:25%;"><strong>Workplace / Kolel:</strong> ${escapeHtml(fa.workplace||'')}</td>
             <td style="${td}width:25%;"><strong>Email:</strong> ${escapeHtml(fa.email||'')}</td></tr>
       </table>
       <h3 style="margin:0 0 3px;">Mother's Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${escapeHtml(mo.name||'')}${mo.maidenName?` <span class="small muted">(née ${escapeHtml(mo.maidenName)})</span>`:''}</td>
+        <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${mo.prefix?`<span dir="auto">${escapeHtml(mo.prefix)}</span> `:''}${escapeHtml(mo.name||'')}${mo.maidenName?` <span class="small muted">(née ${escapeHtml(mo.maidenName)})</span>`:''}</td>
             <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}</td>
             <td style="${td}width:25%;"><strong>Workplace:</strong> ${escapeHtml(mo.workplace||'')}</td>
             <td style="${td}width:25%;"><strong>Email:</strong> ${escapeHtml(mo.email||'')}</td></tr>
@@ -5625,7 +5659,7 @@ function printRegistrationLetter(anyStudentIdInFamily){
   if(!family){ toast('Could not find that family'); return; }
   const familyDisplayName = registrationFamilyDisplayName(family.students[0]);
   const win = window.open('', '_blank');
-  win.document.write(letterheadHtml(registrationPacketBodyHtml(family), `Registration — ${familyDisplayName}`, familyDisplayName, true));
+  win.document.write(letterheadHtml(registrationPacketBodyHtml(family), `Registration — ${familyDisplayName}`, familyDisplayName, true, 92));
   win.document.close();
 }
 // Combined Registration + Tuition Contract as ONE print job — same two documents as the separate
@@ -5646,7 +5680,7 @@ function printAllRegistrationsAndContracts(){
   }).join('');
   if(missingContract) toast(`Tuition Contract skipped for ${missingContract} famil${missingContract===1?'y':'ies'} — set up Tuition Contract Pricing in Settings to include it for everyone`);
   const win = window.open('', '_blank');
-  win.document.write(letterheadHtml(combined, `Registration & Tuition Contracts — ${STATE.currentYear} (${families.length} families)`, null, true));
+  win.document.write(letterheadHtml(combined, `Registration & Tuition Contracts — ${STATE.currentYear} (${families.length} families)`, null, true, 92));
   win.document.close();
 }
 function printRegistrationAndContract(anyStudentIdInFamily){
@@ -5659,7 +5693,7 @@ function printRegistrationAndContract(anyStudentIdInFamily){
   const combined = registrationPacketBodyHtml(family) + (contractBody ? `<div style="page-break-before:always;">${letterheadHeaderHtml()}${contractBody}</div>` : '');
   if(!contractBody) toast('Printing Registration only — set up Tuition Contract Pricing in Settings to include the contract too');
   const win = window.open('', '_blank');
-  win.document.write(letterheadHtml(combined, `Registration & Tuition Contract — ${familyDisplayName}`, familyDisplayName, true));
+  win.document.write(letterheadHtml(combined, `Registration & Tuition Contract — ${familyDisplayName}`, familyDisplayName, true, 92));
   win.document.close();
 }
 // Plain-text version for email — same pattern as tuitionStatementEmailText/emailTuitionStatement:
@@ -7790,7 +7824,10 @@ function openStudentModal(id){
       <div class="form-cols" style="margin-bottom:8px;align-items:start;">
         <div>
           <div class="small muted" style="margin-bottom:3px;">Mother</div>
-          <input id="mMotherName" placeholder="Mother's name" value="${escapeHtml(mo.name||'')}" style="margin-bottom:6px;">
+          <div style="display:flex;gap:6px;margin-bottom:6px;">
+            <input id="mMotherPrefix" placeholder="Prefix/תואר" dir="auto" value="${escapeHtml(mo.prefix||'')}" style="width:90px;flex-shrink:0;">
+            <input id="mMotherName" placeholder="Mother's name" value="${escapeHtml(mo.name||'')}" style="flex:1;">
+          </div>
           <input id="mMotherCell" placeholder="Mother's cell" value="${escapeHtml(mo.cell||'')}" style="margin-bottom:4px;">
           <select id="mMotherCanText" style="margin-bottom:6px;">${canTextOptionsHtml(mo.canText)}</select>
           <input id="mMotherEmail" placeholder="Mother's email" value="${escapeHtml(mo.email||'')}" style="margin-bottom:6px;">
@@ -7799,13 +7836,17 @@ function openStudentModal(id){
         </div>
         <div>
           <div class="small muted" style="margin-bottom:3px;">Father</div>
-          <input id="mFatherName" placeholder="Father's name" value="${escapeHtml(fa.name||'')}" style="margin-bottom:6px;">
+          <div style="display:flex;gap:6px;margin-bottom:6px;">
+            <input id="mFatherPrefix" placeholder="Prefix/תואר" dir="auto" value="${escapeHtml(fa.prefix||'')}" style="width:90px;flex-shrink:0;">
+            <input id="mFatherName" placeholder="Father's name" value="${escapeHtml(fa.name||'')}" style="flex:1;">
+          </div>
           <input id="mFatherCell" placeholder="Father's cell" value="${escapeHtml(fa.cell||'')}" style="margin-bottom:4px;">
           <select id="mFatherCanText" style="margin-bottom:6px;">${canTextOptionsHtml(fa.canText)}</select>
           <input id="mFatherEmail" placeholder="Father's email" value="${escapeHtml(fa.email||'')}" style="margin-bottom:6px;">
           <input id="mFatherWorkplace" placeholder="Father's workplace / Kolel" value="${escapeHtml(fa.workplace||'')}">
         </div>
       </div>
+      <div class="small muted" style="margin-top:-4px;margin-bottom:8px;">Prefix (Rabbi, Dr., Mr., Mrs., or Hebrew — הרב, ר', מרת, etc.) is used on the formal salutation for letters and the Registration packet — leave blank to default to Mr./Mrs.</div>
       <div class="form-cols" style="margin-bottom:8px;">
         <input id="mHomePhone" placeholder="Home phone" value="${escapeHtml(s.homePhone||'')}">
         <input id="mAddress" placeholder="Home address" value="${escapeHtml(s.address||'')}">
@@ -7978,8 +8019,8 @@ function saveStudent(id){
   }
   s.goals = s.goals||[];
   s.parent = { name: document.getElementById('mParentName').value.trim(), phone: document.getElementById('mParentPhone').value.trim(), email: document.getElementById('mParentEmail').value.trim(), canText: parseCanText(document.getElementById('mParentCanText').value) };
-  s.mother = { name: document.getElementById('mMotherName').value.trim(), yiddishName: document.getElementById('mMotherYiddishName') ? document.getElementById('mMotherYiddishName').value.trim() : ((s.mother&&s.mother.yiddishName)||''), cell: document.getElementById('mMotherCell').value.trim(), email: document.getElementById('mMotherEmail').value.trim(), canText: parseCanText(document.getElementById('mMotherCanText').value), workplace: document.getElementById('mMotherWorkplace').value.trim(), maidenName: document.getElementById('mMotherMaidenName').value.trim() };
-  s.father = { name: document.getElementById('mFatherName').value.trim(), yiddishName: document.getElementById('mFatherYiddishName') ? document.getElementById('mFatherYiddishName').value.trim() : ((s.father&&s.father.yiddishName)||''), cell: document.getElementById('mFatherCell').value.trim(), email: document.getElementById('mFatherEmail').value.trim(), canText: parseCanText(document.getElementById('mFatherCanText').value), workplace: document.getElementById('mFatherWorkplace').value.trim() };
+  s.mother = { name: document.getElementById('mMotherName').value.trim(), prefix: document.getElementById('mMotherPrefix').value.trim(), yiddishName: document.getElementById('mMotherYiddishName') ? document.getElementById('mMotherYiddishName').value.trim() : ((s.mother&&s.mother.yiddishName)||''), cell: document.getElementById('mMotherCell').value.trim(), email: document.getElementById('mMotherEmail').value.trim(), canText: parseCanText(document.getElementById('mMotherCanText').value), workplace: document.getElementById('mMotherWorkplace').value.trim(), maidenName: document.getElementById('mMotherMaidenName').value.trim() };
+  s.father = { name: document.getElementById('mFatherName').value.trim(), prefix: document.getElementById('mFatherPrefix').value.trim(), yiddishName: document.getElementById('mFatherYiddishName') ? document.getElementById('mFatherYiddishName').value.trim() : ((s.father&&s.father.yiddishName)||''), cell: document.getElementById('mFatherCell').value.trim(), email: document.getElementById('mFatherEmail').value.trim(), canText: parseCanText(document.getElementById('mFatherCanText').value), workplace: document.getElementById('mFatherWorkplace').value.trim() };
   s.emergencyContacts = [
     { name: document.getElementById('mEmerg1Name').value.trim(), relationship: document.getElementById('mEmerg1Relationship').value.trim(), phone: document.getElementById('mEmerg1Phone').value.trim() },
     { name: document.getElementById('mEmerg2Name').value.trim(), relationship: document.getElementById('mEmerg2Relationship').value.trim(), phone: document.getElementById('mEmerg2Phone').value.trim() },
@@ -12220,13 +12261,13 @@ function masterDocFieldSourceValue(source, person, personType){
   }
   return '';
 }
-// A family's shared last name isn't stored as its own field anywhere in Ledger, so a formal
-// salutation ("Mr. and Mrs. Cohen") guesses it from whichever parent's full name is on file —
-// father's, then mother's, then finally the student's own, on the assumption the family shares
-// one surname. Falls back to '' (handled by the caller) if nothing at all is on file to guess from.
+// A family's shared last name is always the student's own last name — a family here is only
+// ever grouped by shared parent contact info in the first place (see familyKeyForStudent), so
+// every sibling in a family already shares this by construction; using the student's own name
+// directly is also more reliable than guessing from a parent's name field, which can be a first
+// name only, a maiden name, or simply blank.
 function studentFamilyLastName(student){
-  const source = (student.father&&student.father.name) || (student.mother&&student.mother.name) || student.name || '';
-  const parts = source.trim().split(/\s+/).filter(Boolean);
+  const parts = (student.name||'').trim().split(/\s+/).filter(Boolean);
   return parts.length ? parts[parts.length-1] : '';
 }
 // Informal salutation — first names of whichever parents are on file, joined with "and" (e.g.
@@ -12238,15 +12279,19 @@ function studentParentSalutationNames(student){
   const names = [firstNameOf(student.mother&&student.mother.name), firstNameOf(student.father&&student.father.name)].filter(Boolean);
   return names.length ? names.join(' and ') : `Parent/Guardian of ${student.name||''}`;
 }
-// Formal salutation — "Mr. and Mrs. Cohen" when both parents are on file, "Mr. Cohen"/"Mrs.
-// Cohen" if only one is, or the same "Parent/Guardian of [Student]" fallback if neither is.
+// Formal salutation — e.g. "Mr. and Mrs. Cohen" when both parents are on file. Each parent's own
+// Prefix (set on the student record — Rabbi, Dr., Mr., Mrs., etc.) is used when present, so a
+// family isn't stuck with the "Mr./Mrs." default if it doesn't actually fit them; falls back to
+// the ordinary Mr./Mrs. default only for whichever parent doesn't have their own Prefix on file.
 function studentParentSalutationFormal(student){
   const lastName = studentFamilyLastName(student);
   if(!lastName) return `Parent/Guardian of ${student.name||''}`;
   const hasMother = !!(student.mother&&student.mother.name), hasFather = !!(student.father&&student.father.name);
-  if(hasMother && hasFather) return `Mr. and Mrs. ${lastName}`;
-  if(hasFather) return `Mr. ${lastName}`;
-  if(hasMother) return `Mrs. ${lastName}`;
+  const fatherPrefix = (student.father&&student.father.prefix) || 'Mr.';
+  const motherPrefix = (student.mother&&student.mother.prefix) || 'Mrs.';
+  if(hasMother && hasFather) return `${fatherPrefix} and ${motherPrefix} ${lastName}`;
+  if(hasFather) return `${fatherPrefix} ${lastName}`;
+  if(hasMother) return `${motherPrefix} ${lastName}`;
   return `Parent/Guardian of ${student.name||''}`;
 }
 // For the Registration packet and Tuition Contract specifically — these are printed FORMS, not
@@ -14393,7 +14438,7 @@ async function embedBrandImage(pdfDoc, dataUrl){
   if(mime === 'image/jpeg' || mime === 'image/jpg') return pdfDoc.embedJpg(bytes);
   return pdfDoc.embedPng(bytes);
 }
-function letterheadHtml(bodyHtml, docTitle, pageFooterExtra, suppressRunningHeader){
+function letterheadHtml(bodyHtml, docTitle, pageFooterExtra, suppressRunningHeader, logoHeightPx){
   // Every printed document runs through here, so this one lookup is what makes a document
   // from a past year automatically print with THAT year's name/logo/address instead of
   // today's — using STATE.currentYear (the same Academic Year selector that already scopes
@@ -14490,7 +14535,7 @@ function letterheadHtml(bodyHtml, docTitle, pageFooterExtra, suppressRunningHead
       .lh-toolbar .lh-print-btn{background:#76154A;color:#fff;}
       .lh-toolbar .lh-close-btn{background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.4) !important;}
       .lh-header{text-align:center;padding:0 0 10px;}
-      .lh-header img{height:64px;}
+      .lh-header img{height:${logoHeightPx||64}px;}
       .lh-title{font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:21px;text-align:center;color:#500F32;border-top:2px solid #76154A;border-bottom:2px solid #76154A;padding:8px 0;margin-bottom:18px;}
       .lh-meta{color:#655C6D;margin-bottom:18px;font-size:13px;text-align:center;}
       .lh-footer{position:fixed;bottom:0;left:0;right:0;}
@@ -19051,7 +19096,7 @@ function renderRegistrationFamilies(editable){
 function renderRegistrationLetterEditor(){
   return `<div class="card">
     <h3>📝 Registration Letter</h3>
-    <div class="muted small" style="margin-bottom:12px;">The cover letter printed as page 1 of the Registration packet. Editable — update it for a new academic year (Hebrew date, requirements, wording) any time, right here, no code change needed. Supports Hebrew/Yiddish text (right-to-left) directly, plus bold, italic, underline, alignment, and bullet lists.</div>
+    <div class="muted small" style="margin-bottom:12px;">The cover letter printed as page 1 of the Registration packet. Editable — update it for a new academic year (Hebrew date, requirements, wording) any time, right here, no code change needed. Supports Hebrew/Yiddish text directly — it auto-detects direction as you type, or select a paragraph and use the ⇤ RTL / RTL ⇥ buttons to force it — plus bold, italic, underline, alignment, bullet lists, and a font picker.</div>
     <div class="muted small" style="margin-bottom:12px;background:var(--surface-2);border-radius:8px;padding:8px 10px;">✨ Type <code>{{Parents}}</code> anywhere in the letter (e.g. "Dear {{Parents}},") and it's replaced with each family's own formal salutation — "Mr. and Mrs. Cohen," "Mrs. Cohen," etc. — when the letter is actually printed or emailed to them. It's saved here as the literal tag, not a specific family's name, so the same letter personalizes correctly for every family.</div>
     ${registrationLetterToolbarHtml()}
     <div id="regLetterEditor" contenteditable="true" dir="auto" style="min-height:320px;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-family:inherit;font-size:14px;line-height:1.6;margin-bottom:10px;">${registrationLetterHtml()}</div>
