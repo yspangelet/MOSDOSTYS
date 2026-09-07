@@ -14717,7 +14717,19 @@ function cssContentEscape(s){
 // file) — factored out so a multi-page combined printout (see printAllRouteRosters) can repeat
 // the real header on every page instead of only the very first one, which is what letterheadHtml
 // alone would do since it only places the header once, at the top of the whole document.
+//
+// A per-branch logo (if the currently-selected branch has one uploaded — see branchEditorHtml)
+// takes priority over everything else, including a year-based override — the same precedence the
+// main nav bar's own logo already uses (see the brand-logo-card block above), so a printed
+// document and what's shown on screen while working in that branch never disagree about which
+// logo is "the" logo. Falls through to the year-override/main-school logo exactly as before for
+// a single-branch school, "All" view, or a branch with no logo of its own uploaded.
 function currentBrandLogoSrc(){
+  const activeBranch = (STATE.branches.length>1 && VIEW.currentBranch && VIEW.currentBranch!=='all') ? byId(STATE.branches, VIEW.currentBranch) : null;
+  if(activeBranch && activeBranch.hasLogo){
+    if(!window.__branchLogoCache[activeBranch.id]) prefetchBranchLogo(activeBranch.id).then(()=>renderContent());
+    return window.__branchLogoCache[activeBranch.id] || LOGO_DATA_URI;
+  }
   const override = STATE.brandingHistory && STATE.brandingHistory[STATE.currentYear];
   return override ? (window.__yearLogoCache[STATE.currentYear] || LOGO_DATA_URI) : (STATE.schoolLogoDataUrl || LOGO_DATA_URI);
 }
