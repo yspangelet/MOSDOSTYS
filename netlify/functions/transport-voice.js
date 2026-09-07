@@ -450,6 +450,52 @@ async function tripStopStatusText(trip, stop, state, dateISO) {
   return `The route is now after stop number ${busStopNum}. ${riderLabel}'s stop is number ${myStopNum}.${liveNote}`;
 }
 
+// The admin-PIN summary reports a REGULAR ROUTE's own overall status — not tied to any one
+// student's stop — reusing the exact same "real check-ins over GPS proximity" progress rule as
+// studentStatusText above, just without a rider to compare it against. A route with zero stops on
+// either leg for today is skipped entirely by the caller (buildAdminSummaryTwiml below) rather
+// than reported here, since "no stops scheduled" isn't a meaningful status to read aloud.
+async function routeStatusText(route, dir, state, dateISO) {
+  const orderedStops = (route[dir] || []).map((e) => (state.transportStops || []).find((s) => s.id === e.stopId)).filter(Boolean);
+  if (!orderedStops.length) return null;
+  const legLabel = dir === 'am' ? 'morning' : 'afternoon';
+  const key = route.id + '_' + dir;
+  const log = ((state.transportLog || {})[dateISO] || {})[key] || {};
+  const live = (state.transportLiveLocations || {})[key];
+  const liveAgeMin = live ? Math.round((Date.now() - live.updatedAt) / 60000) : null;
+  const isLiveNow = live && liveAgeMin != null && liveAgeMin < 20;
+  const nearStreet = isLiveNow ? await reverseGeocodeServer(state.googleMapsApiKey, live.lat, live.lng) : null;
+  const liveNote = isLiveNow
+    ? ` Driver's location last updated ${liveAgeMin < 1 ? 'less than a minute ago' : liveAgeMin + ' minutes ago'}${nearStreet ? ', near ' + nearStreet : ''}.`
+    : '';
+  if (isLegCompletedServer(state, dateISO, key)) {
+    return `${route.name}, ${legLabel}: completed.`;
+  }
+  const studentsByStopId = {};
+  (state.students || []).forEach((s) => { if (s.transportStopId) (studentsByStopId[s.transportStopId] = studentsByStopId[s.transportStopId] || []).push(s.id); });
+  const progress = currentStopProgress(orderedStops, log, studentsByStopId);
+  if (!progress) {
+    if (!isLegStartedServer(state, dateISO, key)) return `${route.name}, ${legLabel}: has not started yet.`;
+    return `${route.name}, ${legLabel}: started, now before stop number 1.${liveNote}`;
+  }
+  return `${route.name}, ${legLabel}: now after stop number ${progress.idx + 1} of ${orderedStops.length}.${liveNote}`;
+}
+// Every active regular route's current AM or PM leg (whichever the school-day clock says is
+// "now" — see currentDirection), in one call — the admin PIN's whole reason to exist: a real
+// phone-only status check with no app access at all. Deliberately regular routes only, not
+// Custom Routes — those are one-off/repeating trips outside the normal school day, better checked
+// individually (a rider's own lookup code) than folded into a single "everything right now" list
+// that could otherwise run long enough to be unpleasant to actually sit through on a call.
+async function buildAdminSummaryTwiml(state, dateISO, dayAbbr, minutes) {
+  const closedReason = notASchoolDayReason(state, dayAbbr, dateISO);
+  if (closedReason) return twiml(`<Say>Admin summary. ${escXml(closedReason)} No routes are scheduled today.</Say><Say>Goodbye.</Say>`);
+  const dir = currentDirection(state, dayAbbr, minutes);
+  const routes = state.transportRoutes || [];
+  const lines = (await Promise.all(routes.map((r) => routeStatusText(r, dir, state, dateISO)))).filter(Boolean);
+  if (!lines.length) return twiml('<Say>Admin summary. No routes have any stops set up for today.</Say><Say>Goodbye.</Say>');
+  return twiml(`<Say>Admin summary, ${lines.length} active route${lines.length > 1 ? 's' : ''}.</Say>` + lines.map((l) => `<Say>${escXml(l)}</Say>`).join('') + '<Say>Goodbye.</Say>');
+}
+
 // One caller can legitimately match more than one thing: two enrolled children, a child who's on
 // a regular route AND separately listed on a Custom Route today, or someone who isn't an
 // enrolled student at all but is a named rider on a Custom Route stop (matched by that stop's own
@@ -511,6 +557,15 @@ exports.handler = async (event) => {
   // this way until the office generates one for them.
   if (params.Digits) {
     const digits = String(params.Digits).trim();
+    // Checked FIRST, before any student's own lookup code — an Admin sets this PIN up
+    // specifically so a call to the same Parent Line number can report on transportation as a
+    // whole instead of one student's stop (see saveTransportAdminPin in the frontend, which
+    // already refuses to save a PIN that collides with a real student code, so this ordering
+    // should never actually shadow a real student in practice).
+    if (notif.adminPin && digits === String(notif.adminPin)) {
+      const { dayAbbr, minutes } = nowInSchoolTZ();
+      return await buildAdminSummaryTwiml(state, dateISO, dayAbbr, minutes);
+    }
     const student = (state.students || []).find((s) => s.transportLookupCode && s.transportLookupCode === digits);
     if (student) {
       // Combine with any Custom Route stops already linked to this same student — same idea as
