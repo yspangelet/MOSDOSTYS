@@ -5582,9 +5582,10 @@ function registrationPacketBodyHtml(family){
   const medicalComment = [med.comment, ...family.students.map(s=>s.allergies)].filter(Boolean).join('; ');
   // td/th padding and h3 margins are kept tight to fit the whole Family/Father/Mother/Student/
   // Emergency/Medical/Grandparents form on ONE printed page — this is meant to be handed to a
-  // family as a single sheet, not spill onto a second page. The page itself gets its own extra
-  // side padding (below) so the content doesn't feel jammed against the edge despite that.
-  const td = 'padding:4px 8px;border:1px solid #999;';
+  // family as a single sheet, not spill onto a second page. The page itself still gets a little
+  // extra side padding (below) so the content doesn't feel jammed against the edge, without
+  // making the boxes themselves any narrower than they need to be.
+  const td = 'padding:4px 10px;border:1px solid #999;';
   const studentRowsHtml = family.students.map(s=>{
     const yiddish = s.yiddishName ? ` (${escapeHtml([s.yiddishName, s.yiddishLastName].filter(Boolean).join(' '))})` : '';
     return `
@@ -5611,13 +5612,13 @@ function registrationPacketBodyHtml(family){
       ${mailingAddressBlockHtml}
       <div style="margin-top:0.4in;">${letterBody}</div>
     </div>
-    <div style="page-break-before:always;font-size:12px;padding:0 0.65in;">
+    <div style="page-break-before:always;font-size:12px;padding:0 0.3in;">
       ${letterheadHeaderHtml()}
       <h2 style="text-align:center;margin:0 0 8px;">PARENT / STUDENT INFORMATION</h2>
       <h3 style="margin:0 0 3px;">Family Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
         <tr><td style="${td}width:33%;"><strong>נאמען / Name:</strong> ${escapeHtml(familyDisplayName)}</td>
-            <td style="${td}width:34%;"><strong>Address:</strong> ${escapeHtml(first.address||'')}</td>
+            <td style="${td}width:34%;"><strong>Address:</strong> ${formatAddressForPrint(first.address)}</td>
             <td style="${td}width:33%;"><strong>Phone (Home):</strong> ${escapeHtml(first.homePhone||'')}</td></tr>
       </table>
       <h3 style="margin:0 0 3px;">Father's Information</h3>
@@ -5650,22 +5651,22 @@ function registrationPacketBodyHtml(family){
       <h3 style="margin:0 0 3px;">Medical Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
         <tr><td style="${td}width:34%;"><strong>Family Doctor:</strong> ${escapeHtml(med.doctorName||'')||'&nbsp;'}</td>
-            <td style="${td}width:33%;"><strong>Address:</strong> ${escapeHtml(med.doctorAddress||'')||'&nbsp;'}</td>
+            <td style="${td}width:33%;"><strong>Address:</strong> ${med.doctorAddress?formatAddressForPrint(med.doctorAddress):'&nbsp;'}</td>
             <td style="${td}width:33%;"><strong>Phone:</strong> ${escapeHtml(med.doctorPhone||'')||'&nbsp;'}</td></tr>
         <tr><td colspan="3" style="${td}"><strong>Medical Comment / Allergies:</strong> ${escapeHtml(medicalComment)||'&nbsp;'}</td></tr>
       </table>
       <h3 style="margin:0 0 3px;">Grandparent's Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
         <tr><td style="${td}width:34%;"><strong>Name:</strong> ${escapeHtml(gpP.name||'')||'&nbsp;'} <span class="small muted">(Paternal)</span></td>
-            <td style="${td}width:33%;"><strong>Address:</strong> ${escapeHtml(gpP.address||'')||'&nbsp;'}</td>
+            <td style="${td}width:33%;"><strong>Address:</strong> ${gpP.address?formatAddressForPrint(gpP.address):'&nbsp;'}</td>
             <td style="${td}width:33%;"><strong>Phone:</strong> ${escapeHtml(gpP.phone||'')||'&nbsp;'}</td></tr>
         <tr><td style="${td}"><strong>Name:</strong> ${escapeHtml(gpM.name||'')||'&nbsp;'} <span class="small muted">(Maternal)</span></td>
-            <td style="${td}"><strong>Address:</strong> ${escapeHtml(gpM.address||'')||'&nbsp;'}</td>
+            <td style="${td}"><strong>Address:</strong> ${gpM.address?formatAddressForPrint(gpM.address):'&nbsp;'}</td>
             <td style="${td}"><strong>Phone:</strong> ${escapeHtml(gpM.phone||'')||'&nbsp;'}</td></tr>
       </table>
       <h3 style="margin:0 0 3px;">Transportation &amp; Contact Preference</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr><td style="${td}width:50%;"><strong>Pickup/drop-off address, if different from home address above:</strong> ${escapeHtml(first.transportAddress||'')||'&nbsp;'}</td>
+        <tr><td style="${td}width:50%;"><strong>Pickup/drop-off address, if different from home address above:</strong> ${first.transportAddress?formatAddressForPrint(first.transportAddress):'&nbsp;'}</td>
             <td style="${td}width:25%;"><strong>Best person to contact:</strong> ${escapeHtml(pref.person||'')||'&nbsp;'}</td>
             <td style="${td}width:25%;"><strong>Best way to contact:</strong> ${escapeHtml(pref.method||'')||'&nbsp;'}</td></tr>
       </table>
