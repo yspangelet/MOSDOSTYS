@@ -4421,6 +4421,13 @@ function renderSchoolDashboard(){
       if(reportCountInRule(reportsForTpl, {count:t.requiredCount, period:t.requiredPeriod})<t.requiredCount) overdueReportPairs++;
     });
   });
+  const therapyEnabled = STATE.dashboardComplianceWidgets.mandate!==false;
+  const kpis = [
+    `<div class="card kpi"><div class="num">${students.length}</div><div class="lbl">Students this year</div></div>`,
+    therapyEnabled? `<div class="card kpi"><div class="num">${todaysSessions.length}</div><div class="lbl">Sessions today (${dName})</div></div>` : '',
+    `<div class="card kpi"><div class="num">${presentCount}/${students.length}</div><div class="lbl">Marked present today</div></div>`,
+    `<div class="card kpi"><div class="num">${pendingReports}</div><div class="lbl">Awaiting approval</div></div>`,
+  ].filter(Boolean);
   return `
   <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
     <div class="muted small">School-wide view — you see this because your role has Oversight access.</div>
@@ -4449,11 +4456,8 @@ function renderSchoolDashboard(){
       <button class="btn-ghost btn btn-sm" style="flex-shrink:0;" onclick="promptWaiveSessionNote('${s.id}','${date}')">No note — give a reason</button>
     </div>`).join('')}</div>` : ''}
   </div>` : ''}
-  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px;">
-    <div class="card kpi"><div class="num">${students.length}</div><div class="lbl">Students this year</div></div>
-    <div class="card kpi"><div class="num">${todaysSessions.length}</div><div class="lbl">Sessions today (${dName})</div></div>
-    <div class="card kpi"><div class="num">${presentCount}/${students.length}</div><div class="lbl">Marked present today</div></div>
-    <div class="card kpi"><div class="num">${pendingReports}</div><div class="lbl">Awaiting approval</div></div>
+  <div class="grid" style="grid-template-columns:repeat(${kpis.length},1fr);margin-bottom:18px;">
+    ${kpis.join('')}
   </div>
   <div class="card" style="margin-bottom:18px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
@@ -4466,13 +4470,13 @@ function renderSchoolDashboard(){
     <h3>Attendance trend</h3>
     <div style="overflow-x:auto;">${renderAttendanceTrendChart()}</div>
   </div>
-  <div class="card" style="margin-bottom:18px;">
+  ${therapyEnabled? `<div class="card" style="margin-bottom:18px;">
     <h3>Recently changed sessions</h3>
     <div class="muted small" style="margin-bottom:8px;">One-date-only moves, time changes, or cancellations a therapist made to their own schedule.</div>
     ${sessionOverridesSummaryHtml()}
-  </div>
-  <div class="grid" style="grid-template-columns:1.3fr 1fr;">
-    <div class="card">
+  </div>` : ''}
+  <div class="grid" style="grid-template-columns:${therapyEnabled?'1.3fr 1fr':'1fr'};">
+    ${therapyEnabled? `<div class="card">
       <h3>Today's schedule — ${dName}, ${fmtDate(today)}</h3>
       ${isHoliday(today)? `<div class="empty-state"><div class="big">🎉</div>School is closed today — ${escapeHtml(isHoliday(today).label)}</div>` :
       todaysSessions.length? `<table><thead><tr><th>Time</th><th>Session</th><th>Staff</th><th>Student(s)</th></tr></thead><tbody>
@@ -4480,7 +4484,7 @@ function renderSchoolDashboard(){
           <tr style="cursor:pointer;" onclick="openSessionDetail('${s.id}')"><td>${fmtTime(s.start)}–${fmtTime(s.end)}</td><td><span class="disc-dot ${disciplineClass(s)}"></span>${escapeHtml(s.title)} <span class="pill pill-teal">${s.type}</span></td>
           <td>${s.staffIds.map(id=>`<span class="link" onclick="event.stopPropagation();showQuickView('staff','${id}')">${escapeHtml(staffName(id))}</span>`).join(', ')}</td><td>${sessionStudentsLabel(s)}</td></tr>`).join('')}
       </tbody></table>` : `<div class="empty-state"><div class="big">🗓️</div>No sessions scheduled for today.</div>`}
-    </div>
+    </div>` : ''}
     <div class="card">
       <h3>Needs attention</h3>
       ${absentList.length? absentList.map(sid=>`<div style="margin-bottom:10px;"><span class="flag">Absent today — ${studentName(sid)}</span></div>`).join('') : '<div class="muted small" style="margin-bottom:10px;">No absences logged yet today.</div>'}
@@ -5556,15 +5560,16 @@ function saveDashboardComplianceWidgets(){
 }
 // Registration packet — page 1 (the editable letter from Settings, personalized with the current
 // year) + page 2 (a Family/Student Information form, one row per child rather than the original
-// paper form's single fixed row). Pre-fills whatever Ledger has on file, including the
-// Emergency Contact / Medical / Grandparents' Information sections and Mother/Father's
-// workplace & maiden name — all now real structured fields on the student record (see
-// openStudentModal's "Emergency contact, medical & grandparents" section), not blank-by-hand
-// fields like the original paper form. "Name"/"First Name" fields are labeled bilingually
-// (Hebrew + English) exactly as they appear on the original paper form; every other field
-// (Address, Phone, Workplace, Maiden Name, Email, Emergency Contact, Medical, Grandparents) is
-// English-only, also matching the original — the source document itself only bilinguals the
-// name fields, not the rest.
+// paper form's single fixed row). Pre-fills whatever Ledger has on file — Emergency Contact,
+// Medical, Grandparents' Information, Mother/Father's workplace/maiden name/prefix, and now also
+// Transportation (per student, matching whatever's on their own profile) and the family's
+// stated Best Contact preference — all real structured fields on the student record (see
+// openStudentModal), covering everything on that record relevant to a reg-ed family (clinical/
+// therapy fields like Diagnosis, therapist assignment, and Respite/Self-Direction billing are
+// deliberately left off — those only apply to an OPWDD/special-needs program, not a reg-ed
+// school, and are already hidden school-wide via the "Therapy / clinical services" toggle in
+// Settings). "Name"/"First Name" fields are labeled bilingually (Hebrew + English) exactly as
+// they appear on the original paper form; every other field is English-only, also matching it.
 function registrationPacketBodyHtml(family){
   const first = family.students[0];
   const familyDisplayName = registrationFamilyDisplayName(first);
@@ -5588,9 +5593,24 @@ function registrationPacketBodyHtml(family){
       <td style="${td}">${escapeHtml(s.studentIdNumber||'')}</td>
       <td style="${td}">${escapeHtml(className(s.classId))}</td>
       <td style="${td}">${s.dob?fmtDate(s.dob):''}${s.hebrewDob?` <span dir="rtl">(${escapeHtml(s.hebrewDob)})</span>`:''}</td>
+      <td style="${td}">${s.usesTransportation!==false?'Yes':'No'}</td>
     </tr>`;}).join('');
+  const pref = first.contactPref||{};
+  // A #10 window envelope's cutout sits roughly 3.5in from the left edge and 2in from the top on
+  // a standard business letter fold — this block is positioned to land inside that window when
+  // the letter is folded in thirds, so the letter itself can be mailed without a separate
+  // envelope label. Uses the exact same name/address formatting as Mailing Labels & Envelopes
+  // (formatAddressForPrint) so the two stay consistent with each other.
+  const mailingAddressBlockHtml = `
+    <div style="margin:0.5in 0 0 3.5in;width:3.25in;line-height:1.35;">
+      <div><strong>${escapeHtml(familyDisplayName)}</strong></div>
+      <div>${formatAddressForPrint(first.address)}</div>
+    </div>`;
   return `
-    <div dir="auto" style="margin-bottom:24px;line-height:1.6;">${letterBody}</div>
+    <div dir="auto" style="line-height:1.6;">
+      ${mailingAddressBlockHtml}
+      <div style="margin-top:0.4in;">${letterBody}</div>
+    </div>
     <div style="page-break-before:always;font-size:12px;padding:0 0.65in;">
       ${letterheadHeaderHtml()}
       <h2 style="text-align:center;margin:0 0 8px;">PARENT / STUDENT INFORMATION</h2>
@@ -5603,20 +5623,20 @@ function registrationPacketBodyHtml(family){
       <h3 style="margin:0 0 3px;">Father's Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
         <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${fa.prefix?`<span dir="auto">${escapeHtml(fa.prefix)}</span> `:''}${escapeHtml(fa.name||'')}</td>
-            <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}</td>
+            <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(fa.cell||fa.phone||'')}${fa.canText===true?' <span class="small muted">(can text)</span>':fa.canText===false?' <span class="small muted">(no text)</span>':''}</td>
             <td style="${td}width:25%;"><strong>Workplace / Kolel:</strong> ${escapeHtml(fa.workplace||'')}</td>
             <td style="${td}width:25%;"><strong>Email:</strong> ${escapeHtml(fa.email||'')}</td></tr>
       </table>
       <h3 style="margin:0 0 3px;">Mother's Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
         <tr><td style="${td}width:28%;"><strong>ערשטע נאמען / First Name:</strong> ${mo.prefix?`<span dir="auto">${escapeHtml(mo.prefix)}</span> `:''}${escapeHtml(mo.name||'')}${mo.maidenName?` <span class="small muted">(née ${escapeHtml(mo.maidenName)})</span>`:''}</td>
-            <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}</td>
+            <td style="${td}width:22%;"><strong>Cell Phone:</strong> ${escapeHtml(mo.cell||mo.phone||'')}${mo.canText===true?' <span class="small muted">(can text)</span>':mo.canText===false?' <span class="small muted">(no text)</span>':''}</td>
             <td style="${td}width:25%;"><strong>Workplace:</strong> ${escapeHtml(mo.workplace||'')}</td>
             <td style="${td}width:25%;"><strong>Email:</strong> ${escapeHtml(mo.email||'')}</td></tr>
       </table>
       <h3 style="margin:0 0 3px;">תלמיד / Student(s) Information</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <thead><tr style="background:#F1E3EC;"><th style="${td}">ערשטע נאמען / Legal Name</th><th style="${td}">Student ID</th><th style="${td}">כתה / Class</th><th style="${td}">DOB / יום הולדת</th></tr></thead>
+        <thead><tr style="background:#F1E3EC;"><th style="${td}">ערשטע נאמען / Legal Name</th><th style="${td}">Student ID</th><th style="${td}">כתה / Class</th><th style="${td}">DOB / יום הולדת</th><th style="${td}">Transportation</th></tr></thead>
         <tbody>${studentRowsHtml}</tbody>
       </table>
       <h3 style="margin:0 0 3px;">Emergency Contact Information</h3>
@@ -5642,6 +5662,12 @@ function registrationPacketBodyHtml(family){
         <tr><td style="${td}"><strong>Name:</strong> ${escapeHtml(gpM.name||'')||'&nbsp;'} <span class="small muted">(Maternal)</span></td>
             <td style="${td}"><strong>Address:</strong> ${escapeHtml(gpM.address||'')||'&nbsp;'}</td>
             <td style="${td}"><strong>Phone:</strong> ${escapeHtml(gpM.phone||'')||'&nbsp;'}</td></tr>
+      </table>
+      <h3 style="margin:0 0 3px;">Transportation &amp; Contact Preference</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+        <tr><td style="${td}width:50%;"><strong>Pickup/drop-off address, if different from home address above:</strong> ${escapeHtml(first.transportAddress||'')||'&nbsp;'}</td>
+            <td style="${td}width:25%;"><strong>Best person to contact:</strong> ${escapeHtml(pref.person||'')||'&nbsp;'}</td>
+            <td style="${td}width:25%;"><strong>Best way to contact:</strong> ${escapeHtml(pref.method||'')||'&nbsp;'}</td></tr>
       </table>
       <h3 style="margin:0 0 3px;">Medical Consent</h3>
       <div style="margin-bottom:4px;">I hereby authorize ${escapeHtml(STATE.schoolName)} as our agent to consent to any emergency diagnostic procedure, medical care, or hospital as deemed necessary for the student(s) listed above.</div>
@@ -18526,8 +18552,8 @@ function requireRegistrationEdit(){
 // as every other AI-suggestion feature in this app (Yiddish names, onboarding packet splitting):
 // this never writes to a real student record directly — it only ever stages a prefill and opens
 // the normal edit modal for a person to check and correct before clicking Save.
-const REGISTRATION_EXTRACT_PROMPT = `This is a completed school registration/intake form — it may be handwritten or typed, and may mix Hebrew/Yiddish and English across one or more pages/photos provided. Extract information about the ONE student and their family found on it. Only include a value if it's actually written on the form — never guess or invent one; leave it as "" (or null for otcMedicationAllowed) if it's blank or illegible. Dates should be returned as YYYY-MM-DD if a real calendar date can be determined, otherwise "". Return ONLY a raw JSON object, no markdown fences, no other text, in exactly this shape:
-{"studentName":"","studentYiddishName":"","studentDob":"","address":"","homePhone":"","fatherName":"","fatherCell":"","fatherEmail":"","fatherWorkplace":"","motherName":"","motherCell":"","motherEmail":"","motherWorkplace":"","motherMaidenName":"","emergencyContact1":{"name":"","relationship":"","phone":""},"emergencyContact2":{"name":"","relationship":"","phone":""},"familyDoctorName":"","familyDoctorAddress":"","familyDoctorPhone":"","medicalComment":"","otcMedicationAllowed":null,"grandparentPaternalName":"","grandparentPaternalAddress":"","grandparentPaternalPhone":"","grandparentMaternalName":"","grandparentMaternalAddress":"","grandparentMaternalPhone":""}`;
+const REGISTRATION_EXTRACT_PROMPT = `This is a completed school registration/intake form — it may be handwritten or typed, and may mix Hebrew/Yiddish and English across one or more pages/photos provided. Extract information about the ONE student and their family found on it. Only include a value if it's actually written on the form — never guess or invent one; leave it as "" (or null for otcMedicationAllowed/usesTransportation) if it's blank, unchecked, or illegible. Dates should be returned as YYYY-MM-DD if a real calendar date can be determined, otherwise "". "fatherPrefix"/"motherPrefix" are an honorific before the name (Rabbi, Dr., Mr., Mrs., or a Hebrew equivalent like הרב/מרת) — only if one is actually written, never assume "Mr."/"Mrs." by default. "bestContactPerson" should be one of Mother/Father/Both/Other if indicated; "bestContactMethod" should be one of Phone call/Text/Email/In-person/Note home if indicated. Return ONLY a raw JSON object, no markdown fences, no other text, in exactly this shape:
+{"studentName":"","studentYiddishName":"","studentDob":"","address":"","homePhone":"","fatherPrefix":"","fatherName":"","fatherCell":"","fatherEmail":"","fatherWorkplace":"","motherPrefix":"","motherName":"","motherCell":"","motherEmail":"","motherWorkplace":"","motherMaidenName":"","emergencyContact1":{"name":"","relationship":"","phone":""},"emergencyContact2":{"name":"","relationship":"","phone":""},"familyDoctorName":"","familyDoctorAddress":"","familyDoctorPhone":"","medicalComment":"","otcMedicationAllowed":null,"grandparentPaternalName":"","grandparentPaternalAddress":"","grandparentPaternalPhone":"","grandparentMaternalName":"","grandparentMaternalAddress":"","grandparentMaternalPhone":"","usesTransportation":null,"transportAddress":"","bestContactPerson":"","bestContactMethod":""}`;
 function openRegistrationUploadModal(){
   if(!requireRegistrationEdit()) return;
   const students = studentsOfYear().slice().sort((a,b)=>a.name.localeCompare(b.name));
@@ -18589,8 +18615,8 @@ function buildStudentPrefillFromExtraction(ex){
   return {
     name: ex.studentName||'', yiddishName: ex.studentYiddishName||'', dob: ex.studentDob||'',
     address: ex.address||'', homePhone: ex.homePhone||'',
-    father: {name:ex.fatherName||'', cell:ex.fatherCell||'', email:ex.fatherEmail||'', workplace:ex.fatherWorkplace||''},
-    mother: {name:ex.motherName||'', cell:ex.motherCell||'', email:ex.motherEmail||'', workplace:ex.motherWorkplace||'', maidenName:ex.motherMaidenName||''},
+    father: {prefix:ex.fatherPrefix||'', name:ex.fatherName||'', cell:ex.fatherCell||'', email:ex.fatherEmail||'', workplace:ex.fatherWorkplace||''},
+    mother: {prefix:ex.motherPrefix||'', name:ex.motherName||'', cell:ex.motherCell||'', email:ex.motherEmail||'', workplace:ex.motherWorkplace||'', maidenName:ex.motherMaidenName||''},
     emergencyContacts: [ex.emergencyContact1||{}, ex.emergencyContact2||{}],
     medical: {doctorName:ex.familyDoctorName||'', doctorAddress:ex.familyDoctorAddress||'', doctorPhone:ex.familyDoctorPhone||'', comment:ex.medicalComment||''},
     otcMedicationAllowed: (typeof ex.otcMedicationAllowed==='boolean') ? ex.otcMedicationAllowed : null,
@@ -18598,6 +18624,10 @@ function buildStudentPrefillFromExtraction(ex){
       paternal: {name:ex.grandparentPaternalName||'', address:ex.grandparentPaternalAddress||'', phone:ex.grandparentPaternalPhone||''},
       maternal: {name:ex.grandparentMaternalName||'', address:ex.grandparentMaternalAddress||'', phone:ex.grandparentMaternalPhone||''},
     },
+    usesTransportation: (typeof ex.usesTransportation==='boolean') ? ex.usesTransportation : true,
+    transportAddressDifferent: !!(ex.transportAddress||'').trim(),
+    transportAddress: ex.transportAddress||'',
+    contactPref: {person:ex.bestContactPerson||'', method:ex.bestContactMethod||''},
   };
 }
 // For an EXISTING student, only ever fills in a field that's currently blank — a real value
@@ -18611,8 +18641,8 @@ function mergeExtractionIntoExistingStudent(s, ex){
   fillBlank(s,'address',ex.address);
   fillBlank(s,'homePhone',ex.homePhone);
   s.father = s.father||{}; s.mother = s.mother||{};
-  fillBlank(s.father,'name',ex.fatherName); fillBlank(s.father,'cell',ex.fatherCell); fillBlank(s.father,'email',ex.fatherEmail); fillBlank(s.father,'workplace',ex.fatherWorkplace);
-  fillBlank(s.mother,'name',ex.motherName); fillBlank(s.mother,'cell',ex.motherCell); fillBlank(s.mother,'email',ex.motherEmail); fillBlank(s.mother,'workplace',ex.motherWorkplace); fillBlank(s.mother,'maidenName',ex.motherMaidenName);
+  fillBlank(s.father,'prefix',ex.fatherPrefix); fillBlank(s.father,'name',ex.fatherName); fillBlank(s.father,'cell',ex.fatherCell); fillBlank(s.father,'email',ex.fatherEmail); fillBlank(s.father,'workplace',ex.fatherWorkplace);
+  fillBlank(s.mother,'prefix',ex.motherPrefix); fillBlank(s.mother,'name',ex.motherName); fillBlank(s.mother,'cell',ex.motherCell); fillBlank(s.mother,'email',ex.motherEmail); fillBlank(s.mother,'workplace',ex.motherWorkplace); fillBlank(s.mother,'maidenName',ex.motherMaidenName);
   s.medical = s.medical||{};
   fillBlank(s.medical,'doctorName',ex.familyDoctorName); fillBlank(s.medical,'doctorAddress',ex.familyDoctorAddress); fillBlank(s.medical,'doctorPhone',ex.familyDoctorPhone); fillBlank(s.medical,'comment',ex.medicalComment);
   if(s.otcMedicationAllowed==null && typeof ex.otcMedicationAllowed==='boolean') s.otcMedicationAllowed = ex.otcMedicationAllowed;
@@ -18625,6 +18655,18 @@ function mergeExtractionIntoExistingStudent(s, ex){
   s.grandparents.paternal = s.grandparents.paternal||{}; s.grandparents.maternal = s.grandparents.maternal||{};
   fillBlank(s.grandparents.paternal,'name',ex.grandparentPaternalName); fillBlank(s.grandparents.paternal,'address',ex.grandparentPaternalAddress); fillBlank(s.grandparents.paternal,'phone',ex.grandparentPaternalPhone);
   fillBlank(s.grandparents.maternal,'name',ex.grandparentMaternalName); fillBlank(s.grandparents.maternal,'address',ex.grandparentMaternalAddress); fillBlank(s.grandparents.maternal,'phone',ex.grandparentMaternalPhone);
+  fillBlank(s,'transportAddress',ex.transportAddress);
+  if((ex.transportAddress||'').trim() && !s.transportAddressDifferent) s.transportAddressDifferent = true;
+  // usesTransportation is intentionally left alone for an EXISTING student even if the form
+  // indicates otherwise — it defaults to true for every student from the moment they're created,
+  // so there's no reliable way to tell "someone already made this decision" apart from "nobody's
+  // touched it yet," and flipping a real, already-confirmed Yes/No based on a scanned form would
+  // risk silently changing actual transportation service. Safe to set outright for a brand-new
+  // student instead — see buildStudentPrefillFromExtraction — since there's no prior decision to
+  // clobber there.
+  s.contactPref = s.contactPref || {};
+  fillBlank(s.contactPref,'person',ex.bestContactPerson);
+  fillBlank(s.contactPref,'method',ex.bestContactMethod);
 }
 async function runRegistrationUploadExtraction(){
   const mode = document.getElementById('regUploadMode').value;
