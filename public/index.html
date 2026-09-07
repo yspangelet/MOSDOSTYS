@@ -5596,13 +5596,13 @@ function registrationPacketBodyHtml(family){
       <td style="${td}">${s.usesTransportation!==false?'Yes':'No'}</td>
     </tr>`;}).join('');
   const pref = first.contactPref||{};
-  // A #10 window envelope's cutout sits roughly 3.5in from the left edge and 2in from the top on
-  // a standard business letter fold — this block is positioned to land inside that window when
-  // the letter is folded in thirds, so the letter itself can be mailed without a separate
-  // envelope label. Uses the exact same name/address formatting as Mailing Labels & Envelopes
+  // A standard #10 window envelope's cutout aligns with the LEFT margin of a tri-folded business
+  // letter (not indented toward the center/right) — the window sits low enough on the envelope
+  // that positioning this block ~2in from the top of the page is what lands it in the window once
+  // folded. Uses the exact same name/address formatting as Mailing Labels & Envelopes
   // (formatAddressForPrint) so the two stay consistent with each other.
   const mailingAddressBlockHtml = `
-    <div style="margin:0.5in 0 0 3.5in;width:3.25in;line-height:1.35;">
+    <div style="margin:0.6in 0 0 0;line-height:1.35;">
       <div><strong>${escapeHtml(familyDisplayName)}</strong></div>
       <div>${formatAddressForPrint(first.address)}</div>
     </div>`;
