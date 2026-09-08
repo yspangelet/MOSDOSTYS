@@ -1380,7 +1380,7 @@ function migrateState(){
   // FAMILIES for tuition/registration/fees — different payer, different numbers, different
   // recipients for a statement — so it gets its own catalog and ledger rather than trying to
   // extend the Medicaid-billing data shapes to also mean something totally different.
-  STATE.tuitionFeeTypes = STATE.tuitionFeeTypes || []; // [{id, name, defaultAmount, frequency:'monthly'|'oneTime'|'yearly'}]
+  STATE.tuitionFeeTypes = STATE.tuitionFeeTypes || []; // [{id, name, defaultAmount, frequency:'monthly'|'oneTime'|'yearly', branchOverrides:{[branchId]:'exclude'|'strike'}}]
   STATE.tuitionPayments = STATE.tuitionPayments || []; // [{id, studentId, date, amount, method, note, recordedBy, recordedAt}]
   // Immunizations — entirely school-defined (Settings → Service Requirements → Immunizations),
   // never a hardcoded regulatory list; see studentImmunizationStatus for how compliance is judged
@@ -5397,14 +5397,25 @@ function tuitionContractBodyHtml(family){
   const address = [first.address, first.city, first.state, first.zip].filter(Boolean);
   const familyDisplayName = registrationFamilyDisplayName(first);
   const cfg = STATE.tuitionContractConfig;
-  const tierTypes = cfg.tierFeeTypeIds.map(id=>byId(STATE.tuitionFeeTypes,id)).filter(Boolean);
-  const extraTypes = cfg.extraFeeTypeIds.map(id=>byId(STATE.tuitionFeeTypes,id)).filter(Boolean);
+  const familyBranchId = recordBranchId(first);
+  // A fee type can be set, per branch (Manage Fee Types → "Per branch"), to either not appear at
+  // all on that branch's contracts, or to appear with its price struck through — still visible,
+  // so a family can see the option exists, but clearly marked as not actually offered to them
+  // rather than making them wonder why it's just missing. Checked here rather than baked
+  // separately into tierFeeTypeIds/extraFeeTypeIds, since the exact same shared fee type can be
+  // normal for one branch, hidden for another, and struck-through for a third, all at once.
+  const branchOverrideFor = (ft) => (ft.branchOverrides && ft.branchOverrides[familyBranchId]) || null;
+  const tierTypes = cfg.tierFeeTypeIds.map(id=>byId(STATE.tuitionFeeTypes,id)).filter(Boolean).filter(ft=>branchOverrideFor(ft)!=='exclude');
+  const extraTypes = cfg.extraFeeTypeIds.map(id=>byId(STATE.tuitionFeeTypes,id)).filter(Boolean).filter(ft=>branchOverrideFor(ft)!=='exclude');
   if(!tierTypes.length && !extraTypes.length) return null;
   const rowsHtml = family.students.map(s=>`
     <tr>
       <td style="padding:8px;border:1px solid #999;">${escapeHtml(s.name)}</td>
       <td style="padding:8px;border:1px solid #999;text-align:center;">${escapeHtml(className(s.classId))}</td>
-      ${tierTypes.map(ft=>`<td style="padding:8px;border:1px solid #999;text-align:center;">☐ ${fmtMoney(ft.defaultAmount)}</td>`).join('')}
+      ${tierTypes.map(ft=>{
+        const struck = branchOverrideFor(ft)==='strike';
+        return `<td style="padding:8px;border:1px solid #999;text-align:center;${struck?'color:#999;':''}">${struck ? `<span style="text-decoration:line-through;">${fmtMoney(ft.defaultAmount)}</span> <span class="small">(not offered)</span>` : `☐ ${fmtMoney(ft.defaultAmount)}`}</td>`;
+      }).join('')}
     </tr>`).join('');
   return `
     <div dir="rtl" style="text-align:center;font-weight:700;font-size:15pt;margin-bottom:2px;">שטר הסכם לשכר לימוד לשנת הלימודים ${hebrewYearLabel(STATE.currentYear)} לפ"ק</div>
@@ -5424,7 +5435,11 @@ function tuitionContractBodyHtml(family){
       <tbody>${rowsHtml}</tbody>
     </table>` : ''}
     ${extraTypes.length ? `<table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
-      ${extraTypes.map(ft=>`<tr><td style="padding:8px;border:1px solid #999;">${escapeHtml(ft.name)}</td><td style="padding:8px;border:1px solid #999;width:120px;">${ft.defaultAmount?fmtMoney(ft.defaultAmount):'$__________'}</td></tr>`).join('')}
+      ${extraTypes.map(ft=>{
+        const struck = branchOverrideFor(ft)==='strike';
+        const amountHtml = ft.defaultAmount ? (struck? `<span style="text-decoration:line-through;color:#999;">${fmtMoney(ft.defaultAmount)}</span> <span class="small">(not offered)</span>` : fmtMoney(ft.defaultAmount)) : '$__________';
+        return `<tr><td style="padding:8px;border:1px solid #999;${struck?'color:#999;':''}">${escapeHtml(ft.name)}</td><td style="padding:8px;border:1px solid #999;width:120px;">${amountHtml}</td></tr>`;
+      }).join('')}
       <tr style="font-weight:700;background:#F7F2E8;"><td style="padding:8px;border:1px solid #999;">Total for the year</td><td style="padding:8px;border:1px solid #999;">$__________</td></tr>
     </table>` : ''}
     <div style="font-weight:700;margin-bottom:8px;" dir="rtl">אופני התשלום:</div>
@@ -5664,10 +5679,21 @@ function registrationPacketBodyHtml(family){
     <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
       <tr>${wcell('Best person to contact', escapeHtml(pref.person||''), '50%')}${wcell('Best way to contact', escapeHtml(pref.method||''), '50%')}</tr>
     </table>`;
+  // The letter body gets its OWN dir="auto", independent of the address block above it — dir="auto"
+  // picks a whole element's base direction from the FIRST strong-directional character found
+  // anywhere inside it, and the mailing address block's English name comes first in the DOM. Left
+  // as one shared dir="auto" wrapper (as this used to be), that English name is what decided
+  // "LTR" for the ENTIRE block including the mostly-Yiddish letter after it — the opposite of what
+  // the Settings editor itself resolves to, since the editor's own dir="auto" only ever sees the
+  // letter's own content. That mismatch is exactly what silently reordered English words embedded
+  // in Yiddish text (e.g. "up to date") differently on the printed page than what was actually
+  // typed. Address block gets its own explicit dir="ltr" too, rather than left to inherit
+  // whatever the letter next to it resolves to — a US mailing address should never flip direction
+  // just because of what happens to be written below it.
   return `
-    <div dir="auto" style="line-height:1.6;">
-      ${mailingAddressBlockHtml}
-      <div style="margin-top:0.4in;">${letterBody}</div>
+    <div style="line-height:1.6;">
+      <div dir="ltr">${mailingAddressBlockHtml}</div>
+      <div dir="auto" style="margin-top:0.4in;">${letterBody}</div>
     </div>
     <div style="page-break-before:always;font-size:11px;">
       ${letterheadHeaderHtml()}
@@ -19447,7 +19473,7 @@ function renderRegistrationLetterEditor(){
 function renderRegistrationPricing(){
   return `<div class="card">
     <h3>💲 Tuition Contract Pricing</h3>
-    <div class="muted small" style="margin-bottom:12px;">Which fee types show on the printed Tuition Contract, and how. Names and dollar amounts come from your existing fee type catalog — Billing → "⚙ Manage fee types" — so update the price there and it updates here automatically. If your list below is empty, set up fee types there first.</div>
+    <div class="muted small" style="margin-bottom:12px;">Which fee types show on the printed Tuition Contract, and how. Names and dollar amounts come from your existing fee type catalog — Billing → "⚙ Manage fee types" — so update the price there and it updates here automatically. If your list below is empty, set up fee types there first.${STATE.branches.length>1?" If a branch does not charge one of these at all, or should see it crossed out instead of removed, set that per branch on the fee type itself in \"⚙ Manage fee types.\"":''}</div>
     <h4 style="margin-bottom:4px;">Tuition tier options <span class="small muted" style="font-weight:400;">(shown as a checkbox per child, e.g. different tuition levels)</span></h4>
     <div style="margin-bottom:14px;">
       ${STATE.tuitionFeeTypes.length? STATE.tuitionFeeTypes.map(ft=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:4px;"><input type="checkbox" class="tcpTier" value="${ft.id}" ${STATE.tuitionContractConfig.tierFeeTypeIds.includes(ft.id)?'checked':''}> ${escapeHtml(ft.name)} — ${fmtMoney(ft.defaultAmount)}</label>`).join('') : '<div class="muted small">No fee types set up yet.</div>'}
@@ -20230,13 +20256,23 @@ function renderTuitionStudentDetail(studentId, canManage){
   </div>`;
 }
 function openTuitionFeeTypesModal(){
+  const multiBranch = STATE.branches.length>1;
+  const branchOverrideRowHtml = (ft) => multiBranch ? `<div class="small muted" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:2px 0 6px 4px;">Per branch:${STATE.branches.map(b=>`<span style="display:flex;align-items:center;gap:4px;">${escapeHtml(b.name)}: <select class="tinput ftBranchOverride" data-id="${ft?ft.id:''}" data-branch="${b.id}" style="width:auto;font-size:12px;padding:1px 4px;">
+    <option value="" ${!(ft&&ft.branchOverrides&&ft.branchOverrides[b.id])?'selected':''}>Normal</option>
+    <option value="exclude" ${(ft&&ft.branchOverrides&&ft.branchOverrides[b.id]==='exclude')?'selected':''}>Don't show</option>
+    <option value="strike" ${(ft&&ft.branchOverrides&&ft.branchOverrides[b.id]==='strike')?'selected':''}>Show crossed out</option>
+  </select></span>`).join('')}</div>` : '';
   showModal(`<h3>Manage fee types</h3>
     <div class="muted small" style="margin-bottom:10px;">The school-wide catalog — Tuition, Registration Fee, Technology Fee, whatever categories your school bills for. Assign these to individual students from their own Tuition &amp; Fees page, with an amount that can differ per student.</div>
-    <div id="tuitionFeeTypesList">${(STATE.tuitionFeeTypes||[]).map(ft=>`<div style="display:flex;gap:8px;align-items:center;padding:4px 0;">
-      <input class="tinput ftName" data-id="${ft.id}" value="${escapeHtml(ft.name)}" style="flex:1;">
-      <input class="tinput ftAmount" data-id="${ft.id}" type="number" min="0" step="0.01" value="${ft.defaultAmount||0}" style="width:100px;" placeholder="Default $">
-      <select class="tinput ftFreq" data-id="${ft.id}" style="width:110px;"><option value="monthly" ${ft.frequency==='monthly'?'selected':''}>Monthly</option><option value="yearly" ${ft.frequency==='yearly'?'selected':''}>Yearly</option><option value="oneTime" ${ft.frequency==='oneTime'?'selected':''}>One-time</option></select>
-      <button class="btn-ghost btn btn-sm" onclick="deleteTuitionFeeType('${ft.id}')">🗑</button>
+    ${multiBranch? `<div class="muted small" style="margin-bottom:10px;background:var(--surface-2);border-radius:8px;padding:8px 10px;">Different branches can treat the same fee differently on the printed Tuition Contract and Registration packet: <strong>Don't show</strong> leaves it off entirely for that branch's families (e.g. a Snack Fee only one branch actually charges); <strong>Show crossed out</strong> still prints it — with a line through the price — so families can see it exists but isn't an option for them, rather than wondering why it's missing.</div>` : ''}
+    <div id="tuitionFeeTypesList">${(STATE.tuitionFeeTypes||[]).map(ft=>`<div class="ftRow" style="padding:4px 0;border-bottom:1px solid var(--line);margin-bottom:4px;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input class="tinput ftName" data-id="${ft.id}" value="${escapeHtml(ft.name)}" style="flex:1;">
+        <input class="tinput ftAmount" data-id="${ft.id}" type="number" min="0" step="0.01" value="${ft.defaultAmount||0}" style="width:100px;" placeholder="Default $">
+        <select class="tinput ftFreq" data-id="${ft.id}" style="width:110px;"><option value="monthly" ${ft.frequency==='monthly'?'selected':''}>Monthly</option><option value="yearly" ${ft.frequency==='yearly'?'selected':''}>Yearly</option><option value="oneTime" ${ft.frequency==='oneTime'?'selected':''}>One-time</option></select>
+        <button class="btn-ghost btn btn-sm" onclick="deleteTuitionFeeType('${ft.id}')">🗑</button>
+      </div>
+      ${branchOverrideRowHtml(ft)}
     </div>`).join('') || '<div class="muted small">None yet.</div>'}</div>
     <button class="btn-ghost btn btn-sm" style="margin-top:8px;" onclick="addTuitionFeeTypeRow()">+ Add a fee type</button>
     <div class="modal-actions"><button class="btn-ghost btn" onclick="closeModal()">Close</button><button class="btn" onclick="saveTuitionFeeTypes()">Save</button></div>`);
@@ -20244,12 +20280,21 @@ function openTuitionFeeTypesModal(){
 function addTuitionFeeTypeRow(){
   const list = document.getElementById('tuitionFeeTypesList');
   const id = uid('ft');
+  const multiBranch = STATE.branches.length>1;
   const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:4px 0;';
-  row.innerHTML = `<input class="tinput ftName" data-id="${id}" placeholder="Fee name" style="flex:1;">
+  row.className = 'ftRow';
+  row.style.cssText = 'padding:4px 0;border-bottom:1px solid var(--line);margin-bottom:4px;';
+  row.innerHTML = `<div style="display:flex;gap:8px;align-items:center;">
+    <input class="tinput ftName" data-id="${id}" placeholder="Fee name" style="flex:1;">
     <input class="tinput ftAmount" data-id="${id}" type="number" min="0" step="0.01" value="0" style="width:100px;" placeholder="Default $">
     <select class="tinput ftFreq" data-id="${id}" style="width:110px;"><option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="oneTime">One-time</option></select>
-    <button class="btn-ghost btn btn-sm" onclick="this.parentElement.remove()">🗑</button>`;
+    <button class="btn-ghost btn btn-sm" onclick="deleteTuitionFeeType('${id}')">🗑</button>
+  </div>
+  ${multiBranch? `<div class="small muted" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:2px 0 6px 4px;">Per branch:${STATE.branches.map(b=>`<span style="display:flex;align-items:center;gap:4px;">${escapeHtml(b.name)}: <select class="tinput ftBranchOverride" data-id="${id}" data-branch="${b.id}" style="width:auto;font-size:12px;padding:1px 4px;">
+    <option value="" selected>Normal</option>
+    <option value="exclude">Don't show</option>
+    <option value="strike">Show crossed out</option>
+  </select></span>`).join('')}</div>` : ''}`;
   list.appendChild(row);
 }
 function saveTuitionFeeTypes(){
@@ -20261,7 +20306,11 @@ function saveTuitionFeeTypes(){
     if(!name) return;
     const amountEl = document.querySelector(`.ftAmount[data-id="${id}"]`);
     const freqEl = document.querySelector(`.ftFreq[data-id="${id}"]`);
-    updated.push({ id, name, defaultAmount: parseFloat(amountEl.value)||0, frequency: freqEl.value });
+    const branchOverrides = {};
+    document.querySelectorAll(`.ftBranchOverride[data-id="${id}"]`).forEach(sel=>{
+      if(sel.value) branchOverrides[sel.dataset.branch] = sel.value;
+    });
+    updated.push({ id, name, defaultAmount: parseFloat(amountEl.value)||0, frequency: freqEl.value, branchOverrides });
   });
   STATE.tuitionFeeTypes = updated;
   saveState(); closeModal(); renderContent();
@@ -20274,7 +20323,7 @@ function saveTuitionFeeTypes(){
 }
 function deleteTuitionFeeType(id){
   const row = document.querySelector(`.ftName[data-id="${id}"]`);
-  if(row) row.closest('div').remove();
+  if(row) row.closest('.ftRow').remove();
 }
 function openTuitionItemModal(studentId, itemId){
   const s = byId(STATE.students, studentId); if(!s) return;
