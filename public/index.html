@@ -20205,7 +20205,15 @@ function buildCheckbookCheckHtml({account, checkNum, date, payeeName, payeeAddr,
   // E-13B font and magnetic-ink toner regardless), plain spacing is the safer choice: it's built
   // from ordinary characters every font renders identically, with zero risk of an odd glyph
   // showing up on a real check going out the door.
-  const micrLine = `${checkNum}     ${routing}     ${acct}`;
+  // Real check number formats DO follow a real convention at the bottom: the routing number is
+  // always exactly 9 digits, and the check number is typically zero-padded to at least 4 digits
+  // in the MICR line specifically (even though it prints plain, unpadded at the top of the check
+  // as "No. 101"). Padding the check number here to match that convention — routing/account
+  // numbers are left exactly as entered rather than padded, since an account or routing number
+  // that's the "wrong" length almost always means it was mistyped, and silently padding it would
+  // hide that mistake instead of surfacing it.
+  const micrCheckNum = String(checkNum).padStart(4, '0');
+  const micrLine = `${micrCheckNum}     ${routing}     ${acct}`;
   // Applied to a wrapper OUTSIDE .check-page, as padding rather than margin — .check-page has its
   // own width/centering rules (max-width + margin:auto to center it in the preview, full-width at
   // print time), and stacking an offset margin directly onto that could fight with those rules or
@@ -20330,7 +20338,12 @@ function checkbookSaveSettings(){
   VIEW.checkbookSettingsFormOpen = false;
   saveState(true, null, ['checkbookAccounts']);
   renderContent();
-  toast('Account details saved');
+  const routingDigits = acct.routingNum.replace(/\D/g,'');
+  if(acct.routingNum && routingDigits.length !== 9){
+    toast(`Saved — but heads up: that routing number is ${routingDigits.length} digits. A real one is always exactly 9, so double-check it before printing a check.`);
+  } else {
+    toast('Account details saved');
+  }
 }
 // Applies immediately (like the school logo upload elsewhere) rather than waiting for "Save
 // account details" — a file input's chosen image has to be read via FileReader right away; there
@@ -20369,6 +20382,13 @@ function checkbookPrintCheck(){
   const account = checkbookSelectedAccount();
   if(!account || !account.orgName || !account.routingNum || !account.acctNum){
     toast('Add an account with your organization and bank details first'); return;
+  }
+  // A real US routing number is always exactly 9 digits — no exceptions, no shorter/longer real
+  // ones exist. Catching this here, at print time, surfaces a mistyped routing number as a clear
+  // warning instead of silently printing a check that will bounce or get rejected at deposit.
+  const routingDigits = account.routingNum.replace(/\D/g,'');
+  if(routingDigits.length !== 9){
+    toast(`This account's routing number is ${routingDigits.length} digits — a real routing number is always exactly 9. Fix it in Account on file before printing.`); return;
   }
   const v = checkbookGetFormValues();
   if(!v.payeeName || !v.amount){ toast('Enter a payee and amount first'); return; }
@@ -20678,7 +20698,7 @@ function renderCheckbook(){
            ${VIEW.checkbookBankDetailsOpen ? `<p class="cb-hint" style="margin:6px 0 0;">${escapeHtml(editingAccount.bankName)} · routing ····${checkbookLastDigits(editingAccount.routingNum)} · acct ····${checkbookLastDigits(editingAccount.acctNum)}</p>` : ''}`
         ) : `
           <div class="cb-warn-box">Your routing and account number are stored with the rest of your school's data — the same security and access already governing everything else here. Only grant Checkbook access to people who should see full bank account details.</div>
-          <div class="cb-hint" style="margin-bottom:10px;">The bottom line (routing/account/check number) prints in the correct order and layout for a real check, but true bank MICR encoding needs a special E-13B magnetic-ink font and toner most office printers don't have. Plain toner prints a visually correct line a person (or a bank's image scanner) can read, but it isn't guaranteed to be machine-MICR-readable — check with your bank if that matters for how you deposit.</div>
+          <div class="cb-hint" style="margin-bottom:10px;">The bottom line follows real check conventions — check number, then routing number, then account number, in that order, with the routing number always exactly 9 digits and the check number zero-padded (e.g. "0101"). But true bank MICR encoding needs a special E-13B magnetic-ink font and toner most office printers don't have, so getting this formatting exactly right doesn't make it machine-readable by a bank's automated equipment either way — it's a visually correct line a person (or a bank's image scanner) can read, not true magnetic MICR. Check with your bank if that distinction matters for how you deposit.</div>
           <label class="cb-label">Organization / payer name</label>
           <input class="cb-input" id="cbOrgName" value="${escapeHtml(editingAccount.orgName)}" placeholder="e.g. Mosdos Toldos Yehuda">
           <label class="cb-label">Organization address (street)</label>
