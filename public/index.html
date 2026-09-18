@@ -20447,11 +20447,16 @@ function checkbookClearHistory(){
 // export format, a different accounting product, or QuickBooks changing their own template will
 // misread or simply fail to find some fields, which is exactly why every field stays fully
 // editable after loading and nothing here ever auto-prints without a person reviewing it first.
-async function checkbookExtractPdfLines(file){
+// Returns one array of lines PER PAGE, not one flat array for the whole file — a QuickBooks
+// batch export is typically one check per page, and the previous version flattened every page's
+// lines together into a single array before parsing. Since checkbookParseFromLines only ever
+// looks for the FIRST date/payee/amount it finds, a flattened multi-page file only ever produced
+// the first page's check — pages 2 onward were silently invisible to it, not actually unread.
+async function checkbookExtractPdfPages(file){
   const buf = await file.arrayBuffer();
   const pdfjsLib = await loadPdfJs();
   const pdf = await pdfjsLib.getDocument({data:buf}).promise;
-  let lines = [];
+  let pages = [];
   for(let p=1; p<=pdf.numPages; p++){
     const page = await pdf.getPage(p);
     const content = await page.getTextContent();
@@ -20462,12 +20467,14 @@ async function checkbookExtractPdfLines(file){
       lineMap.get(y).push(item);
     });
     const ys = Array.from(lineMap.keys()).sort((a,b)=>b-a);
+    let lines = [];
     ys.forEach(y=>{
       const line = lineMap.get(y).sort((a,b)=>a.transform[4]-b.transform[4]).map(i=>i.str).join(' ').replace(/\s+/g,' ').trim();
       if(line) lines.push(line);
     });
+    pages.push(lines);
   }
-  return lines;
+  return pages;
 }
 function checkbookIsoFromUS(d){
   const parts = d.split('/');
@@ -20505,6 +20512,11 @@ function checkbookParseFromLines(lines){
     memo: '',
   };
 }
+// Each PAGE of each uploaded PDF gets its own queue entry now — a 10-page batch export produces
+// 10 review items, not 1. A page that doesn't parse cleanly (blank, a cover sheet, a continuation
+// page from a check with a long bill-application list) is still added, just flagged, exactly like
+// a whole file that failed to parse before — same "review everything before printing" discipline,
+// just applied per page instead of per file.
 async function checkbookHandlePdfImport(inputEl){
   if(!canManageCheckbook()) return;
   const files = Array.from(inputEl.files||[]);
@@ -20512,19 +20524,25 @@ async function checkbookHandlePdfImport(inputEl){
   const statusEl = document.getElementById('cbImportStatus');
   if(statusEl) statusEl.textContent = `Reading ${files.length} file(s)...`;
   VIEW.checkbookQueue = VIEW.checkbookQueue || [];
+  let totalPages = 0;
   for(const f of files){
     try{
-      const lines = await checkbookExtractPdfLines(f);
-      const parsed = checkbookParseFromLines(lines);
-      VIEW.checkbookQueue.push({ id:uid('cbq'), file:f.name, ...parsed, error: !parsed.payeeName && !parsed.amount });
+      const pages = await checkbookExtractPdfPages(f);
+      pages.forEach((pageLines, idx)=>{
+        const parsed = checkbookParseFromLines(pageLines);
+        const label = pages.length>1 ? `${f.name} (page ${idx+1} of ${pages.length})` : f.name;
+        VIEW.checkbookQueue.push({ id:uid('cbq'), file:label, ...parsed, error: !parsed.payeeName && !parsed.amount });
+        totalPages++;
+      });
     }catch(err){
       console.error(err);
       VIEW.checkbookQueue.push({ id:uid('cbq'), file:f.name, payeeName:'', payeeAddr:'', amount:'', date:todayISODate(), memo:'', error:true });
+      totalPages++;
     }
   }
   inputEl.value = '';
   renderContent();
-  toast(`Imported ${files.length} file(s) — click "Load" on one to review and print it`);
+  toast(`Imported ${totalPages} check(s) from ${files.length} file(s) — click "Load" on one to review and print it`);
 }
 function checkbookLoadQueueItem(id){
   const q = (VIEW.checkbookQueue||[]).find(x=>x.id===id); if(!q) return;
