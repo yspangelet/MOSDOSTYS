@@ -20712,6 +20712,24 @@ function renderCheckbook(){
       .checkbook-module .cb-preview-shell{ background:#fff; padding:0; }
       .checkbook-module .check-page{ box-shadow:none; border:none; max-width:100%; }
       .checkbook-module .stub{ max-width:100%; }
+      /* The bug the person is actually hitting: everything above only hides panels that live
+         INSIDE the checkbook module itself. window.print() prints the whole document, and the
+         checkbook module is rendered inside this app's normal page shell — sidebar, top header
+         bar (hamburger/back/title/year/branch/"Signed in as"/sign out), the amber "Viewing as"
+         banner, the red "session expired" banner, and the floating assistant widget all sit
+         OUTSIDE the checkbook module in the DOM, so none of the rules above ever touched them.
+         Every other print flow in this app (letterheadHtml, doc-viewer, print-toolbar) avoids
+         this entirely by rendering into its own separate window/overlay instead of printing the
+         live SPA page in place — Checkbook is the one place that prints in place, so it's the
+         one place that needs to explicitly blank out the rest of the app shell for print. */
+      .sidebar-scrim, .sidebar, #assistantWidgetWrap{ display:none !important; }
+      /* .topbar, the amber "Viewing as" banner, and the red "session expired" banner are all
+         direct children of .main that sit before #content and have no class of their own worth
+         targeting individually — hiding every direct child of .main except #content is a single
+         rule that blanks out all of them (present or not) without touching that markup. */
+      .main > *:not(#content){ display:none !important; }
+      .main{ margin:0 !important; padding:0 !important; }
+      #content{ padding:0 !important; }
     }
   </style>
 
