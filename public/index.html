@@ -20431,6 +20431,7 @@ function checkbookReprintCheck(id){
   if(!canManageCheckbook()){ toast('You do not have permission'); return; }
   const h = (STATE.checkbookHistory||[]).find(x=>x.id===id);
   if(!h){ toast('Could not find that check'); return; }
+  if(h.voided){ toast(`Check #${h.checkNum} is voided and can't be reprinted. Un-void it first if that was a mistake.`); return; }
   const account = checkbookAccount(h.accountId);
   if(!account){ toast('No account on file to reprint this check with — add one first'); return; }
   showConfirm(`Reprint check #${h.checkNum} to ${h.payee} for ${fmtMoney(h.amount)}? This prints an exact duplicate — the check number and everything else stays the same. Only do this if the original never reached the bank (a printer jam, a smudge, etc.), not to send a second payment.`, ()=>{
@@ -20452,6 +20453,39 @@ function checkbookReprintCheck(id){
       doPrint();
     }
   }, 'Reprint');
+}
+// Voiding is the real-world answer to "this check should never be usable again" — a mistake, a
+// check that was damaged before it went out, one that was reported lost or stolen, etc. Doesn't
+// delete the history row (the check number and everything about it stays on record, which is
+// exactly what you want for a paper trail/reconciliation) — just marks it so checkbookReprintCheck
+// refuses to reprint it, and the history table shows it struck through with a clear VOIDED label
+// instead of a working Reprint button. Deliberately does NOT free up or reuse that check number —
+// a voided check number should stay voided and skipped, never handed to a different, later check.
+function checkbookVoidCheck(id){
+  if(!canManageCheckbook()){ toast('You do not have permission'); return; }
+  const h = (STATE.checkbookHistory||[]).find(x=>x.id===id);
+  if(!h){ toast('Could not find that check'); return; }
+  showDangerConfirm(`Void check #${h.checkNum} to ${h.payee} for ${fmtMoney(h.amount)}? A voided check can never be reprinted from here again, and its number is never reused. This does not undo anything already done at the bank — if this check was already deposited, voiding it here won't reverse that.`, ()=>{
+    h.voided = true;
+    h.voidedAt = new Date().toISOString();
+    h.voidedBy = VIEW.userId;
+    saveState(true, null, ['checkbookHistory']);
+    closeModal(); renderContent();
+    toast(`Check #${h.checkNum} is now voided`);
+  }, 'Void check');
+}
+// A deliberate, separate, less-scary action than voiding — for correcting a genuine mistake (a
+// check voided by accident) without pretending it needs the same weight as voiding a real check.
+function checkbookUnvoidCheck(id){
+  if(!canManageCheckbook()){ toast('You do not have permission'); return; }
+  const h = (STATE.checkbookHistory||[]).find(x=>x.id===id);
+  if(!h){ toast('Could not find that check'); return; }
+  showConfirm(`Un-void check #${h.checkNum}? This makes it reprintable again — only do this if it was voided by mistake.`, ()=>{
+    delete h.voided; delete h.voidedAt; delete h.voidedBy;
+    saveState(true, null, ['checkbookHistory']);
+    renderContent();
+    toast(`Check #${h.checkNum} is no longer voided`);
+  }, 'Un-void');
 }
 function checkbookClearHistory(){
   if(!canManageCheckbook()){ toast('You do not have permission'); return; }
@@ -20662,9 +20696,19 @@ function renderCheckbook(){
     .checkbook-module .cb-queue-item button.cb-btn-secondary{ width:auto; margin-top:0; padding:5px 10px; font-size:12px; }
     .checkbook-module .cb-remove-link{ background:none; border:none; color:#a5382f; text-decoration:underline; cursor:pointer; font-size:12px; padding:0; font-family:inherit; }
     @media print{
-      body *{ visibility:hidden; }
-      #cbPrintArea, #cbPrintArea *{ visibility:visible; }
-      #cbPrintArea{ position:absolute; top:0; left:0; width:100%; padding:0; margin:0; background:#fff; }
+      /* The actual bug: setting body * to visibility:hidden makes everything else invisible, but
+         visibility:hidden — unlike display:none — still reserves the FULL layout space for
+         every hidden element. This whole screen's worth of panels (account settings, PDF
+         import, the New check form, Recent checks history) was still occupying its normal
+         height on the page even while invisible, so if that hidden content was taller than
+         one printed page, the browser paginated for it anyway — producing a second, blank-
+         looking page with nothing actually visible on it. display:none removes an element
+         from layout entirely, so hidden content no longer takes up any page space at all. */
+      #cbColumnLeft{ display:none !important; }
+      #cbHistoryPanel{ display:none !important; }
+      #cbPreviewPanel{ border:none !important; box-shadow:none !important; padding:0 !important; }
+      #cbPreviewPanel h2{ display:none !important; }
+      .checkbook-module .cb-grid{ display:block !important; }
       .checkbook-module .cb-preview-shell{ background:#fff; padding:0; }
       .checkbook-module .check-page{ box-shadow:none; border:none; max-width:100%; }
       .checkbook-module .stub{ max-width:100%; }
@@ -20672,7 +20716,7 @@ function renderCheckbook(){
   </style>
 
   <div class="cb-grid">
-    <div>
+    <div id="cbColumnLeft">
       <div class="cb-panel">
         <h2>Account on file</h2>
         ${accounts.length ? `<div class="cb-row2" style="margin-bottom:10px;align-items:end;">
@@ -20781,7 +20825,7 @@ function renderCheckbook(){
     </div>
 
     <div>
-      <div class="cb-panel">
+      <div class="cb-panel" id="cbPreviewPanel">
         <h2>Preview</h2>
         <div class="cb-preview-shell">
           <div id="cbPrintArea">
@@ -20789,18 +20833,22 @@ function renderCheckbook(){
           </div>
         </div>
       </div>
-      <div class="cb-panel" style="margin-top:20px;">
+      <div class="cb-panel" id="cbHistoryPanel" style="margin-top:20px;">
         <h2>Recent checks <button class="cb-linklike" onclick="checkbookClearHistory()">clear</button></h2>
         ${history.length ? `<table class="cb-history">
           <thead><tr><th>No.</th><th>Date</th><th>Payee</th>${accounts.length>1?'<th>Account</th>':''}<th style="text-align:right;">Amount</th><th></th></tr></thead>
           <tbody>${history.map(h=>{
             const hAcct = checkbookAccount(h.accountId);
-            return `<tr>
+            const voidedStyle = h.voided ? 'text-decoration:line-through;color:#8a8571;' : '';
+            return `<tr style="${voidedStyle}">
             <td>#${h.checkNum}</td><td>${escapeHtml(h.date)}</td>
             <td style="font-family:inherit;">${escapeHtml(h.payee)}</td>
             ${accounts.length>1?`<td style="font-family:inherit;">${hAcct?escapeHtml(checkbookAccountLabel(hAcct)):'<span class="cb-hint" style="margin:0;">(account deleted)</span>'}</td>`:''}
             <td style="text-align:right;">$${checkbookFormatMoney(h.amount)}</td>
-            <td style="text-align:right;"><button class="cb-linklike" onclick="checkbookReprintCheck('${h.id}')">🖨 Reprint</button></td>
+            <td style="text-align:right;white-space:nowrap;">${h.voided
+              ? `<span style="color:var(--cb-warn);font-weight:700;font-family:inherit;text-decoration:none;">VOIDED</span> <button class="cb-linklike" style="text-decoration:none;" onclick="checkbookUnvoidCheck('${h.id}')">un-void</button>`
+              : `<button class="cb-linklike" onclick="checkbookReprintCheck('${h.id}')">🖨 Reprint</button> · <button class="cb-linklike" style="color:var(--cb-warn);" onclick="checkbookVoidCheck('${h.id}')">void</button>`
+            }</td>
           </tr>`;}).join('')}</tbody>
         </table>` : '<p class="cb-hint">No checks printed yet.</p>'}
       </div>
