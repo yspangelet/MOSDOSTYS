@@ -20423,6 +20423,26 @@ function checkbookPrintCheck(){
     finishPrintAndRecord();
   }
 }
+// Shows the exact check that would print — same buildCheckbookCheckHtml the real print path
+// uses, so what's in the modal is exactly what would come out of the printer, not an
+// approximation — without committing to paper. Lets someone double-check a check before
+// spending a physical check on it, especially useful for a reprint where a mistake means
+// burning another sheet of check stock. Read-only: the only action from here is handing off
+// to the real checkbookReprintCheck flow (with its own confirmation), never printing directly.
+function checkbookPreviewCheck(id){
+  const h = (STATE.checkbookHistory||[]).find(x=>x.id===id);
+  if(!h){ toast('Could not find that check'); return; }
+  const account = checkbookAccount(h.accountId);
+  if(!account){ toast('No account on file to preview this check with'); return; }
+  const checkHtml = buildCheckbookCheckHtml({ account, checkNum:h.checkNum, date:h.date, payeeName:h.payee, payeeAddr:h.payeeAddr||'', amount:h.amount, memo:h.memo });
+  showModal(`<h3 style="margin-bottom:2px;">Check #${h.checkNum}${h.voided?' <span style="color:var(--cb-warn, #a5382f);font-size:13px;">(VOIDED)</span>':''}</h3>
+    <p class="small" style="color:var(--ink-soft);margin:0 0 14px;">This is exactly what would print — nothing is sent to the printer from here.</p>
+    <div class="checkbook-module"><div class="cb-preview-shell" style="padding:16px;">${checkHtml}</div></div>
+    <div class="modal-actions">
+      <button class="btn-ghost btn" onclick="closeModal()">Close</button>
+      ${h.voided ? '' : `<button class="btn" onclick="closeModal();checkbookReprintCheck('${h.id}')">🖨 Reprint this check</button>`}
+    </div>`, true);
+}
 // Reprints a check EXACTLY as originally recorded — same account, same check number, same
 // everything — for a jammed printer, a smudge, or a check that needs a fresh copy for some other
 // reason. Never touches that account's nextCheckNum and never adds a second history row, since
@@ -20497,6 +20517,55 @@ function checkbookClearHistory(){
     saveState(true, null, ['checkbookHistory']);
     closeModal(); renderContent();
   }, 'Clear history');
+}
+// All the ways someone might reasonably type a date when searching for a check — the raw
+// ISO string as stored, US-style month/day/year, and the "Sep 18, 2026" form already used
+// elsewhere in the app — joined into one lowercase blob so a single substring match against
+// checkbookHistorySearchTerm catches any of them without needing three separate comparisons.
+function checkbookDateSearchStr(iso){
+  if(!iso) return '';
+  const d = new Date(iso+'T00:00:00');
+  const mdy = isNaN(d) ? '' : d.toLocaleDateString('en-US');
+  return [iso, mdy, fmtDate(iso)].join(' ').toLowerCase();
+}
+// Renders just the history table (or its empty/no-match state) as a string, rather than a full
+// renderContent() — called both on initial render and, from checkbookFilterHistory, on every
+// keystroke in the search box. Re-rendering the whole checkbook screen on every keystroke would
+// tear down and rebuild the search <input> itself, kicking the cursor out mid-type — the exact
+// failure mode checkbookUpdatePreview (the New check form's own live preview) already avoids for
+// the same reason. This keeps that same targeted-update pattern for the new search box.
+function checkbookHistoryTableHtml(history, accounts, term){
+  term = (term||'').trim().toLowerCase();
+  const filtered = term ? history.filter(h=>{
+    return String(h.checkNum).toLowerCase().includes(term)
+      || (h.payee||'').toLowerCase().includes(term)
+      || checkbookDateSearchStr(h.date).includes(term);
+  }) : history;
+  if(!filtered.length){
+    return term ? `<p class="cb-hint">No checks match "${escapeHtml(term)}" — try just the check number, part of the payee's name, or the date.</p>` : '<p class="cb-hint">No checks printed yet.</p>';
+  }
+  return `<table class="cb-history">
+    <thead><tr><th>No.</th><th>Date</th><th>Payee</th>${accounts.length>1?'<th>Account</th>':''}<th style="text-align:right;">Amount</th><th></th></tr></thead>
+    <tbody>${filtered.map(h=>{
+      const hAcct = checkbookAccount(h.accountId);
+      const voidedStyle = h.voided ? 'text-decoration:line-through;color:#8a8571;' : '';
+      return `<tr style="${voidedStyle}">
+      <td>#${h.checkNum}</td><td>${escapeHtml(h.date)}</td>
+      <td style="font-family:inherit;">${escapeHtml(h.payee)}</td>
+      ${accounts.length>1?`<td style="font-family:inherit;">${hAcct?escapeHtml(checkbookAccountLabel(hAcct)):'<span class="cb-hint" style="margin:0;">(account deleted)</span>'}</td>`:''}
+      <td style="text-align:right;">$${checkbookFormatMoney(h.amount)}</td>
+      <td style="text-align:right;white-space:nowrap;">${h.voided
+        ? `<button class="cb-linklike" style="text-decoration:none;" onclick="checkbookPreviewCheck('${h.id}')">👁 Preview</button> · <span style="color:var(--cb-warn);font-weight:700;font-family:inherit;text-decoration:none;">VOIDED</span> <button class="cb-linklike" style="text-decoration:none;" onclick="checkbookUnvoidCheck('${h.id}')">un-void</button>`
+        : `<button class="cb-linklike" style="text-decoration:none;" onclick="checkbookPreviewCheck('${h.id}')">👁 Preview</button> · <button class="cb-linklike" onclick="checkbookReprintCheck('${h.id}')">🖨 Reprint</button> · <button class="cb-linklike" style="color:var(--cb-warn);" onclick="checkbookVoidCheck('${h.id}')">void</button>`
+      }</td>
+    </tr>`;}).join('')}</tbody>
+  </table>`;
+}
+function checkbookFilterHistory(){
+  const input = document.getElementById('cbHistorySearch');
+  VIEW.checkbookHistorySearch = input ? input.value : '';
+  const wrap = document.getElementById('cbHistoryTableWrap');
+  if(wrap) wrap.innerHTML = checkbookHistoryTableHtml(STATE.checkbookHistory||[], checkbookAccounts(), VIEW.checkbookHistorySearch);
 }
 /* ---- QuickBooks check-voucher PDF import ---- */
 // Tuned to one specific QuickBooks Online check-voucher PDF layout (an asterisk-padded
@@ -20694,7 +20763,13 @@ function renderCheckbook(){
     .checkbook-module .sig-block{ width:230px; }
     .checkbook-module .sig-block .line{ border-bottom:1px solid var(--cb-ink); min-height:24px; }
     .checkbook-module .sig-block .lbl{ font-size:10.5px; color:var(--cb-ink-soft); text-align:center; margin-top:2px; }
-    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.55in; font-family:var(--cb-mono); font-size:15px; letter-spacing:2px; text-align:center; }
+    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.65in; font-family:var(--cb-mono); font-size:15px; letter-spacing:2px; text-align:center; }
+    /* Moved up from 0.55in — that sat right down near the check's own bottom edge, which on real
+       perforated check stock is close to (or past) the tear-off line, putting the routing/account
+       line at risk of landing on the wrong side of the fold. 0.65in pulls it up noticeably nearer
+       the memo/signature row while still leaving clear space above it — verified by measuring the
+       actual rendered gap rather than guessing at the inch value (0.72in was tried first and
+       measured out to the two lines nearly touching, so backed off from there). */
     .checkbook-module .stub{ max-width:720px; margin:14px auto 0; border-top:2px dashed #b9b59f; padding-top:14px; font-size:12px; color:var(--cb-ink-soft); }
     .checkbook-module .stub table{ width:100%; border-collapse:collapse; font-size:12px; }
     .checkbook-module .stub th{ text-align:left; font-size:10.5px; letter-spacing:0.3px; color:#8a8571; border-bottom:1px solid var(--cb-paper-line); padding:4px 6px; }
@@ -20871,22 +20946,8 @@ function renderCheckbook(){
       </div>
       <div class="cb-panel" id="cbHistoryPanel" style="margin-top:20px;">
         <h2>Recent checks <button class="cb-linklike" onclick="checkbookClearHistory()">clear</button></h2>
-        ${history.length ? `<table class="cb-history">
-          <thead><tr><th>No.</th><th>Date</th><th>Payee</th>${accounts.length>1?'<th>Account</th>':''}<th style="text-align:right;">Amount</th><th></th></tr></thead>
-          <tbody>${history.map(h=>{
-            const hAcct = checkbookAccount(h.accountId);
-            const voidedStyle = h.voided ? 'text-decoration:line-through;color:#8a8571;' : '';
-            return `<tr style="${voidedStyle}">
-            <td>#${h.checkNum}</td><td>${escapeHtml(h.date)}</td>
-            <td style="font-family:inherit;">${escapeHtml(h.payee)}</td>
-            ${accounts.length>1?`<td style="font-family:inherit;">${hAcct?escapeHtml(checkbookAccountLabel(hAcct)):'<span class="cb-hint" style="margin:0;">(account deleted)</span>'}</td>`:''}
-            <td style="text-align:right;">$${checkbookFormatMoney(h.amount)}</td>
-            <td style="text-align:right;white-space:nowrap;">${h.voided
-              ? `<span style="color:var(--cb-warn);font-weight:700;font-family:inherit;text-decoration:none;">VOIDED</span> <button class="cb-linklike" style="text-decoration:none;" onclick="checkbookUnvoidCheck('${h.id}')">un-void</button>`
-              : `<button class="cb-linklike" onclick="checkbookReprintCheck('${h.id}')">🖨 Reprint</button> · <button class="cb-linklike" style="color:var(--cb-warn);" onclick="checkbookVoidCheck('${h.id}')">void</button>`
-            }</td>
-          </tr>`;}).join('')}</tbody>
-        </table>` : '<p class="cb-hint">No checks printed yet.</p>'}
+        ${history.length ? `<input class="cb-input" id="cbHistorySearch" placeholder="Search by check #, payee name, or date" value="${escapeHtml(VIEW.checkbookHistorySearch||'')}" oninput="checkbookFilterHistory()" style="margin-bottom:12px;">` : ''}
+        <div id="cbHistoryTableWrap">${checkbookHistoryTableHtml(history, accounts, VIEW.checkbookHistorySearch)}</div>
       </div>
     </div>
   </div>
