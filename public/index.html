@@ -20232,6 +20232,7 @@ function buildCheckbookCheckHtml({account, checkNum, date, payeeName, payeeAddr,
         <span class="val">${escapeHtml(payeeName)}</span>
         <span class="amount-box">$ ${checkbookFormatMoney(amtNum)}</span>
       </div>
+      ${payeeAddr ? `<div style="margin:2px 0 0 0;padding-left:2px;font-family:var(--cb-serif);font-size:12px;color:var(--cb-ink-soft);position:relative;z-index:1;">${escapeHtml(payeeAddr)}</div>` : ''}
       <div class="words-line">
         <span class="val">${escapeHtml(wordsLine)}</span>
         <span class="dollars-lbl">DOLLARS</span>
@@ -20746,7 +20747,7 @@ function renderCheckbook(){
         </select>` : ''}
         <label class="cb-label">Payee name</label>
         <input class="cb-input" id="cbPayeeName" placeholder="Asher Spitzer" oninput="checkbookUpdatePreview()">
-        <label class="cb-label">Payee address <span style="font-weight:400;color:#8a8571;">(optional, shown on stub only)</span></label>
+        <label class="cb-label">Payee address <span style="font-weight:400;color:#8a8571;">(optional — prints on the check itself and the stub, so it can show through a window envelope)</span></label>
         <input class="cb-input" id="cbPayeeAddr" placeholder="6004 16th Avenue, Brooklyn, NY 11204" oninput="checkbookUpdatePreview()">
         <div class="cb-row2">
           <div><label class="cb-label">Amount ($)</label><input class="cb-input" id="cbAmount" inputmode="decimal" placeholder="2000.00" oninput="checkbookUpdatePreview()"></div>
