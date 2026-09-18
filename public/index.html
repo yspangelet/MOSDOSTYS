@@ -20297,13 +20297,28 @@ function checkbookPrintCheck(){
   if(amtNum > 1000000){ toast('That amount looks too large to be right — double-check it (checks over $1,000,000 are blocked as a safety check)'); return; }
   checkbookUpdatePreview();
   const usedCheckNum = settings.nextCheckNum;
-  window.print();
-  STATE.checkbookHistory.unshift({ id:uid('chk'), checkNum:usedCheckNum, date:v.checkDate, payee:v.payeeName, payeeAddr:v.payeeAddr, amount:amtNum, memo:v.memo, recordedBy:VIEW.userId, recordedAt:new Date().toISOString() });
-  STATE.checkbookHistory = STATE.checkbookHistory.slice(0,200);
-  settings.nextCheckNum = usedCheckNum + 1;
-  saveState(true, null, ['checkbookSettings','checkbookHistory']);
-  renderContent();
-  toast(`Saved check #${usedCheckNum} to history. Next check will be #${settings.nextCheckNum}.`);
+  // Same reasoning as checkbookReprintCheck — normally the signature <img> has already been sitting
+  // rendered on screen for a while by the time this button is clicked, but a fast-enough workflow
+  // (paste values, hit Print immediately) could still catch it not-yet-decoded. Wait for it, then
+  // print and do the post-print bookkeeping, so the printed check and the saved history always
+  // agree regardless of which path got here.
+  const finishPrintAndRecord = () => {
+    window.print();
+    STATE.checkbookHistory.unshift({ id:uid('chk'), checkNum:usedCheckNum, date:v.checkDate, payee:v.payeeName, payeeAddr:v.payeeAddr, amount:amtNum, memo:v.memo, recordedBy:VIEW.userId, recordedAt:new Date().toISOString() });
+    STATE.checkbookHistory = STATE.checkbookHistory.slice(0,200);
+    settings.nextCheckNum = usedCheckNum + 1;
+    saveState(true, null, ['checkbookSettings','checkbookHistory']);
+    renderContent();
+    toast(`Saved check #${usedCheckNum} to history. Next check will be #${settings.nextCheckNum}.`);
+  };
+  const out = document.getElementById('checkbookOutput');
+  const sigImg = out ? out.querySelector('img') : null;
+  if(sigImg && !sigImg.complete){
+    sigImg.onload = finishPrintAndRecord;
+    sigImg.onerror = finishPrintAndRecord;
+  } else {
+    finishPrintAndRecord();
+  }
 }
 // Reprints a check EXACTLY as originally recorded — same check number, same everything — for a
 // jammed printer, a smudge, or a check that needs a fresh copy for some other reason. Never
@@ -20317,9 +20332,22 @@ function checkbookReprintCheck(id){
   if(!h){ toast('Could not find that check'); return; }
   showConfirm(`Reprint check #${h.checkNum} to ${h.payee} for ${fmtMoney(h.amount)}? This prints an exact duplicate — the check number and everything else stays the same. Only do this if the original never reached the bank (a printer jam, a smudge, etc.), not to send a second payment.`, ()=>{
     const out = document.getElementById('checkbookOutput');
-    if(out) out.innerHTML = buildCheckbookCheckHtml({ checkNum:h.checkNum, date:h.date, payeeName:h.payee, payeeAddr:h.payeeAddr||'', amount:h.amount, memo:h.memo });
-    window.print();
-    toast(`Reprinted check #${h.checkNum}`);
+    if(!out) return;
+    out.innerHTML = buildCheckbookCheckHtml({ checkNum:h.checkNum, date:h.date, payeeName:h.payee, payeeAddr:h.payeeAddr||'', amount:h.amount, memo:h.memo });
+    // Unlike the normal print flow — where the signature <img> has already been sitting rendered
+    // on screen for a while (the live preview updates on every keystroke as the form is filled
+    // in), this inserts that <img> for the very first time and would otherwise call window.print()
+    // in the same instant, before the browser has necessarily finished decoding/painting it —
+    // some browsers print a blank spot in that case. Wait for the image to actually report itself
+    // loaded (or resolve immediately if it's already cached/complete) before printing.
+    const sigImg = out.querySelector('img');
+    const doPrint = () => { window.print(); toast(`Reprinted check #${h.checkNum}`); };
+    if(sigImg && !sigImg.complete){
+      sigImg.onload = doPrint;
+      sigImg.onerror = doPrint;
+    } else {
+      doPrint();
+    }
   }, 'Reprint');
 }
 function checkbookClearHistory(){
@@ -20521,8 +20549,9 @@ function renderCheckbook(){
           !settings.orgName ? '<p class="cb-hint">No account saved yet. Click "edit" to add your bank and organization details.</p>' :
           `<p style="margin:0 0 4px;font-weight:700;">${escapeHtml(settings.orgName)}</p>
            <p class="cb-hint" style="margin:0 0 10px;">${escapeHtml(settings.orgAddr1)}${settings.orgAddr1?', ':''}${escapeHtml(settings.orgAddr2)}</p>
-           <p class="cb-hint" style="margin:0;">${escapeHtml(settings.bankName)} · routing ····${checkbookLastDigits(settings.routingNum)} · acct ····${checkbookLastDigits(settings.acctNum)}</p>
-           <p class="cb-hint" style="margin:6px 0 0;">Next check #: <b style="color:var(--cb-ink);">${settings.nextCheckNum}</b></p>`
+           <p class="cb-hint" style="margin:0 0 10px;">Next check #: <b style="color:var(--cb-ink);">${settings.nextCheckNum}</b></p>
+           <button class="cb-linklike" onclick="VIEW.checkbookBankDetailsOpen=!VIEW.checkbookBankDetailsOpen;renderContent();">${VIEW.checkbookBankDetailsOpen?'▾':'▸'} Bank details</button>
+           ${VIEW.checkbookBankDetailsOpen ? `<p class="cb-hint" style="margin:6px 0 0;">${escapeHtml(settings.bankName)} · routing ····${checkbookLastDigits(settings.routingNum)} · acct ····${checkbookLastDigits(settings.acctNum)}</p>` : ''}`
         ) : `
           <div class="cb-warn-box">Your routing and account number are stored with the rest of your school's data — the same security and access already governing everything else here. Only grant Checkbook access to people who should see full bank account details.</div>
           <div class="cb-hint" style="margin-bottom:10px;">The bottom line (routing/account/check number) prints in the correct order and layout for a real check, but true bank MICR encoding needs a special E-13B magnetic-ink font and toner most office printers don't have. Plain toner prints a visually correct line a person (or a bank's image scanner) can read, but it isn't guaranteed to be machine-MICR-readable — check with your bank if that matters for how you deposit.</div>
