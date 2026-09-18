@@ -20204,14 +20204,16 @@ function buildCheckbookCheckHtml({account, checkNum, date, payeeName, payeeAddr,
   // a cosmetic approximation of real MICR anyway (true machine-readable MICR needs a genuine
   // E-13B font and magnetic-ink toner regardless), plain spacing is the safer choice: it's built
   // from ordinary characters every font renders identically, with zero risk of an odd glyph
-  // showing up on a real check going out the door.
+  // showing up on a real check going out the door. Kept that way here too, even though the
+  // reference check the person attached uses stylized MICR glyphs — reintroducing those would
+  // bring back the exact rendering bug this app already moved away from.
   // Real check number formats DO follow a real convention at the bottom: the routing number is
   // always exactly 9 digits, and the check number is typically zero-padded to at least 4 digits
   // in the MICR line specifically (even though it prints plain, unpadded at the top of the check
-  // as "No. 101"). Padding the check number here to match that convention — routing/account
-  // numbers are left exactly as entered rather than padded, since an account or routing number
-  // that's the "wrong" length almost always means it was mistyped, and silently padding it would
-  // hide that mistake instead of surfacing it.
+  // as "Check Number 101"). Padding the check number here to match that convention — routing/
+  // account numbers are left exactly as entered rather than padded, since an account or routing
+  // number that's the "wrong" length almost always means it was mistyped, and silently padding
+  // it would hide that mistake instead of surfacing it.
   const micrCheckNum = String(checkNum).padStart(4, '0');
   const micrLine = `${micrCheckNum}     ${routing}     ${acct}`;
   // Applied to a wrapper OUTSIDE .check-page, as padding rather than margin — .check-page has its
@@ -20223,36 +20225,37 @@ function buildCheckbookCheckHtml({account, checkNum, date, payeeName, payeeAddr,
   return `
     <div style="padding:${Math.max(0,offsetY)}px 0 0 ${Math.max(0,offsetX)}px;margin:${Math.min(0,offsetY)}px 0 0 ${Math.min(0,offsetX)}px;">
     <div class="check-page">
-      <div class="guilloche"></div>
       <div class="check-top">
         <div class="payer-block">
           <div class="payer-name">${escapeHtml(settings.orgName)}</div>
           <div class="payer-addr">${escapeHtml(settings.orgAddr1)}<br>${escapeHtml(settings.orgAddr2)}</div>
-          <div class="payer-addr" style="margin-top:6px;">${escapeHtml(settings.bankName)}</div>
         </div>
         <div class="check-meta">
-          <div class="num">No. ${checkNum}</div>
-          <div class="date">${dateStr}</div>
+          <div class="meta-col"><div class="meta-lbl">Check Date</div><div class="meta-val">${dateStr}</div></div>
+          <div class="meta-col"><div class="meta-lbl">Check Number</div><div class="meta-val meta-checknum">${checkNum}</div></div>
         </div>
       </div>
-      <div class="pay-line">
-        <span class="lbl">PAY TO THE&nbsp;ORDER&nbsp;OF</span>
-        <span class="val">${escapeHtml(payeeName)}</span>
-        <span class="amount-box">$ ${checkbookFormatMoney(amtNum)}</span>
+      <div class="bank-line">${escapeHtml(settings.bankName)}</div>
+      <div class="pay-row">
+        <div class="pay-lbl">Pay</div>
+        <div class="words-fill">${escapeHtml(wordsLine)}</div>
+        <div class="amount-col"><div class="amount-lbl">Amount</div><div class="amount-val">$ ${checkbookFormatMoney(amtNum)}</div></div>
       </div>
-      ${payeeAddr ? `<div style="margin:2px 0 0 0;padding-left:2px;font-family:var(--cb-serif);font-size:12px;color:var(--cb-ink-soft);position:relative;z-index:1;">${escapeHtml(payeeAddr)}</div>` : ''}
-      <div class="words-line">
-        <span class="val">${escapeHtml(wordsLine)}</span>
-        <span class="dollars-lbl">DOLLARS</span>
+      <div class="order-row">
+        <div class="order-lbl">To The<br>Order<br>Of</div>
+        <div class="payee-block">
+          <div class="payee-name">${escapeHtml(payeeName)}</div>
+          ${payeeAddr ? `<div class="payee-addr">${escapeHtml(payeeAddr)}</div>` : ''}
+        </div>
       </div>
       <div class="bottom-row">
         <div class="memo-block">
-          <div class="lbl">MEMO</div>
+          <div class="lbl">Memo</div>
           <div class="line">${escapeHtml(memo||'')}</div>
         </div>
         <div class="sig-block">
           <div class="line" style="display:flex;align-items:flex-end;justify-content:center;">${settings.signatureEnabled!==false && settings.signatureDataUrl ? `<img src="${settings.signatureDataUrl}" style="max-width:180px;max-height:44px;margin-bottom:-4px;">` : ''}</div>
-          <div class="lbl">AUTHORIZED SIGNATURE</div>
+          <div class="lbl">Authorized Signature</div>
         </div>
       </div>
       <div class="micr">${micrLine}</div>
@@ -20653,38 +20656,45 @@ function renderCheckbook(){
     .checkbook-module .cb-hint{ font-size:11.5px; color:#8a8571; margin-top:6px; line-height:1.4; }
     .checkbook-module .cb-warn-box{ background:#fbf1ee; border:1px solid #e6c3ba; color:var(--cb-warn); font-size:12px; padding:9px 11px; border-radius:3px; margin-bottom:14px; line-height:1.45; }
     .checkbook-module .cb-preview-shell{ background:#e3e6dc; border-radius:4px; padding:26px; }
-    .checkbook-module .check-page{ background:var(--cb-paper); width:100%; max-width:720px; height:3.85in; margin:0 auto; box-shadow:0 2px 10px rgba(0,0,0,0.12); position:relative; padding:22px 26px 18px; border:1px solid #d8d3c0; }
-    /* The signature/memo row and the MICR line are both anchored with a bottom offset off the
-       check's own bottom edge (0.95in and 0.55in respectively, unchanged below) — correct on a
-       real check, and the 0.4in gap between those two was already fine. The actual bug was the
-       check-page box itself being too short (3.5in) for its own top content: the amount-in-words
-       line's normal-flow bottom edge landed only ~6px above the signature row's fixed position,
-       so the two visually ran together. Growing the box taller doesn't move anything anchored to
-       the bottom — it only pushes the empty space that was already there up between the two
-       sections, which is exactly the missing gap. */
-    .checkbook-module .guilloche{ position:absolute; inset:0; pointer-events:none; background-image:repeating-linear-gradient(115deg, rgba(47,82,51,0.05) 0px, rgba(47,82,51,0.05) 1px, transparent 1px, transparent 5px); }
-    .checkbook-module .check-top{ display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1; }
-    .checkbook-module .payer-block{ font-family:var(--cb-serif); }
-    .checkbook-module .payer-name{ font-size:15px; font-weight:700; color:var(--cb-green); }
-    .checkbook-module .payer-addr{ font-size:11.5px; color:var(--cb-ink-soft); line-height:1.5; margin-top:2px; }
-    .checkbook-module .check-meta{ text-align:right; }
-    .checkbook-module .check-meta .num{ font-family:var(--cb-mono); font-size:16px; font-weight:700; color:var(--cb-warn); }
-    .checkbook-module .check-meta .date{ font-family:var(--cb-mono); font-size:12.5px; margin-top:6px; }
-    .checkbook-module .pay-line{ margin-top:26px; display:flex; align-items:baseline; gap:10px; position:relative; z-index:1; }
-    .checkbook-module .pay-line .lbl{ font-size:11px; color:var(--cb-ink-soft); white-space:nowrap; }
-    .checkbook-module .pay-line .val{ flex:1; border-bottom:1px solid var(--cb-ink); font-family:var(--cb-serif); font-size:15px; padding-bottom:3px; min-height:18px; }
-    .checkbook-module .amount-box{ border:1.5px solid var(--cb-ink); font-family:var(--cb-mono); font-size:15px; font-weight:700; padding:4px 10px; white-space:nowrap; }
-    .checkbook-module .words-line{ margin-top:10px; display:flex; align-items:baseline; gap:8px; position:relative; z-index:1; }
-    .checkbook-module .words-line .val{ flex:1; border-bottom:1px solid var(--cb-ink); font-family:var(--cb-serif); font-size:13.5px; padding-bottom:3px; letter-spacing:0.2px; }
-    .checkbook-module .words-line .dollars-lbl{ font-size:11px; color:var(--cb-ink-soft); }
-    .checkbook-module .bottom-row{ position:absolute; left:26px; right:26px; bottom:0.95in; display:flex; justify-content:space-between; align-items:flex-end; gap:20px; z-index:1; }
+    .checkbook-module .check-page{ background:#fff; width:100%; max-width:720px; height:3.95in; margin:0 auto; box-shadow:0 2px 10px rgba(0,0,0,0.12); position:relative; padding:22px 28px 18px; border:1px solid #d8d3c0; font-family:var(--cb-serif); }
+    /* Redesigned to match a plain, traditional business-check layout (org name/address top-left,
+       Check Date/Check Number top-right, Pay/Amount row, To The Order Of block, Memo/Signature
+       row, MICR line at the very bottom) instead of the earlier boxed-amount/watermarked style.
+       The signature/memo row and the MICR line are kept anchored near the bottom (0.95in and
+       0.55in off the check's own bottom edge) rather than up next to the payee address the way
+       the reference check the person attached does it — that tight placement next to the address
+       block is exactly the kind of "not enough room" collision this app already had to fix once
+       for the words-line/signature gap, so it's deliberately avoided here rather than reintroduced
+       in a new spot. check-page is tall enough (3.95in) for all of the rows below plus a real gap
+       before the bottom section, the same fix as before, just re-measured for the new content. */
+    .checkbook-module .check-top{ display:flex; justify-content:space-between; align-items:flex-start; }
+    .checkbook-module .payer-block{ }
+    .checkbook-module .payer-name{ font-size:14.5px; font-weight:700; color:var(--cb-ink); }
+    .checkbook-module .payer-addr{ font-size:11px; color:var(--cb-ink-soft); line-height:1.5; margin-top:3px; }
+    .checkbook-module .check-meta{ display:flex; gap:26px; }
+    .checkbook-module .meta-col{ text-align:center; }
+    .checkbook-module .meta-lbl{ font-size:10px; font-weight:700; color:var(--cb-ink-soft); white-space:nowrap; }
+    .checkbook-module .meta-val{ font-size:13px; margin-top:4px; }
+    .checkbook-module .meta-checknum{ font-weight:700; }
+    .checkbook-module .bank-line{ text-align:center; font-size:11px; color:var(--cb-ink-soft); margin-top:14px; }
+    .checkbook-module .pay-row{ margin-top:22px; display:flex; align-items:flex-end; gap:12px; }
+    .checkbook-module .pay-lbl{ font-size:12.5px; font-weight:700; padding-bottom:3px; }
+    .checkbook-module .words-fill{ flex:1; border-bottom:1px solid var(--cb-ink); font-size:13.5px; font-weight:700; padding-bottom:3px; letter-spacing:0.2px; }
+    .checkbook-module .amount-col{ text-align:right; white-space:nowrap; }
+    .checkbook-module .amount-lbl{ font-size:10px; font-weight:700; color:var(--cb-ink-soft); }
+    .checkbook-module .amount-val{ font-size:15px; font-weight:700; margin-top:2px; }
+    .checkbook-module .order-row{ margin-top:22px; display:flex; gap:14px; }
+    .checkbook-module .order-lbl{ font-size:10px; font-weight:700; color:var(--cb-ink-soft); line-height:1.5; white-space:nowrap; }
+    .checkbook-module .payee-name{ font-size:13.5px; font-weight:700; }
+    .checkbook-module .payee-addr{ font-size:11.5px; color:var(--cb-ink-soft); line-height:1.5; margin-top:3px; }
+    .checkbook-module .bottom-row{ position:absolute; left:28px; right:28px; bottom:0.95in; display:flex; justify-content:space-between; align-items:flex-end; gap:20px; }
     .checkbook-module .memo-block{ flex:1; }
     .checkbook-module .memo-block .lbl{ font-size:10.5px; color:var(--cb-ink-soft); }
-    .checkbook-module .memo-block .line{ border-bottom:1px solid var(--cb-ink); min-height:16px; font-family:var(--cb-serif); font-size:12.5px; }
+    .checkbook-module .memo-block .line{ border-bottom:1px solid var(--cb-ink); min-height:16px; font-size:12.5px; }
     .checkbook-module .sig-block{ width:230px; }
     .checkbook-module .sig-block .line{ border-bottom:1px solid var(--cb-ink); min-height:24px; }
     .checkbook-module .sig-block .lbl{ font-size:10.5px; color:var(--cb-ink-soft); text-align:center; margin-top:2px; }
-    .checkbook-module .micr{ position:absolute; left:26px; right:26px; bottom:0.55in; font-family:var(--cb-mono); font-size:15px; letter-spacing:2px; text-align:center; z-index:1; }
+    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.55in; font-family:var(--cb-mono); font-size:15px; letter-spacing:2px; text-align:center; }
     .checkbook-module .stub{ max-width:720px; margin:14px auto 0; border-top:2px dashed #b9b59f; padding-top:14px; font-size:12px; color:var(--cb-ink-soft); }
     .checkbook-module .stub table{ width:100%; border-collapse:collapse; font-size:12px; }
     .checkbook-module .stub th{ text-align:left; font-size:10.5px; letter-spacing:0.3px; color:#8a8571; border-bottom:1px solid var(--cb-paper-line); padding:4px 6px; }
