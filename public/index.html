@@ -1390,7 +1390,7 @@ function migrateState(){
   // this data is only as private as the rest of your account, and goes wherever your other STATE
   // data goes (backups, exports, anyone with Admin access). Locked to Admin only for now — see
   // manageCheckbook in the permissions list — precisely because of that.
-  STATE.checkbookSettings = STATE.checkbookSettings || {orgName:'', orgAddr1:'', orgAddr2:'', bankName:'', routingNum:'', acctNum:'', nextCheckNum:1001, signatureDataUrl:CHECKBOOK_DEFAULT_SIGNATURE, signatureEnabled:true};
+  STATE.checkbookSettings = STATE.checkbookSettings || {orgName:'', orgAddr1:'', orgAddr2:'', bankName:'', routingNum:'', acctNum:'', nextCheckNum:1001, signatureDataUrl:CHECKBOOK_DEFAULT_SIGNATURE, signatureEnabled:true, printOffsetX:0, printOffsetY:0};
   STATE.checkbookHistory = STATE.checkbookHistory || []; // [{id, checkNum, date, payee, amount, memo, recordedBy, recordedAt}]
   // Immunizations — entirely school-defined (Settings → Service Requirements → Immunizations),
   // never a hardcoded regulatory list; see studentImmunizationStatus for how compliance is judged
@@ -20127,7 +20127,22 @@ function buildCheckbookCheckHtml({checkNum, date, payeeName, payeeAddr, amount, 
   const wordsLine = checkbookFillLine(checkbookAmountToWordsLine(amtNum), 60);
   const routing = (settings.routingNum||'').replace(/\D/g,'');
   const acct = (settings.acctNum||'').replace(/\D/g,'');
+  // Left to right, a real US check's bottom MICR band reads: check number, then the routing
+  // number bracketed by transit symbols, then the account number followed by the on-us symbol —
+  // the original had routing first, which is backwards from every real check. Real MICR
+  // characters also need an actual E-13B MICR font AND magnetic ink toner to be machine-readable
+  // by a bank's reader — this renders the standard visual layout correctly, but plain print/toner
+  // makes it a visual representation for manual/image-based deposit, not true magnetic MICR. See
+  // the hint text in Settings for more on this.
+  const micrLine = `\u2448${checkNum}\u2448 \u2446${routing}\u2446 ${acct}\u2448`;
+  // Applied to a wrapper OUTSIDE .check-page, as padding rather than margin — .check-page has its
+  // own width/centering rules (max-width + margin:auto to center it in the preview, full-width at
+  // print time), and stacking an offset margin directly onto that could fight with those rules or
+  // make the box overflow. A padding on a plain wrapper around the whole check+stub just shifts
+  // everything as one unit, with no side effects on how .check-page sizes or centers itself.
+  const offsetX = settings.printOffsetX || 0, offsetY = settings.printOffsetY || 0;
   return `
+    <div style="padding:${Math.max(0,offsetY)}px 0 0 ${Math.max(0,offsetX)}px;margin:${Math.min(0,offsetY)}px 0 0 ${Math.min(0,offsetX)}px;">
     <div class="check-page">
       <div class="guilloche"></div>
       <div class="check-top">
@@ -20160,7 +20175,7 @@ function buildCheckbookCheckHtml({checkNum, date, payeeName, payeeAddr, amount, 
           <div class="lbl">AUTHORIZED SIGNATURE</div>
         </div>
       </div>
-      <div class="micr">&#9110;${routing}&#9110; ${acct}&#9112; ${checkNum}</div>
+      <div class="micr">${micrLine}</div>
     </div>
     <div class="stub">
       <table>
@@ -20175,6 +20190,7 @@ function buildCheckbookCheckHtml({checkNum, date, payeeName, payeeAddr, amount, 
         </tbody>
       </table>
       <p style="margin-top:8px;">Check No. ${checkNum} — ${escapeHtml(settings.bankName)}</p>
+    </div>
     </div>`;
 }
 // Reads the draft directly off the live DOM inputs and rewrites ONLY the preview <div>'s
@@ -20230,6 +20246,8 @@ function checkbookSaveSettings(){
     // than re-read, so this button doesn't need to know anything about how it got there.
     signatureDataUrl: STATE.checkbookSettings.signatureDataUrl || '',
     signatureEnabled: el('cbSignatureEnabled').checked,
+    printOffsetX: parseFloat(el('cbPrintOffsetX').value) || 0,
+    printOffsetY: parseFloat(el('cbPrintOffsetY').value) || 0,
   };
   VIEW.checkbookSettingsFormOpen = false;
   saveState(true, null, ['checkbookSettings']);
@@ -20280,12 +20298,29 @@ function checkbookPrintCheck(){
   checkbookUpdatePreview();
   const usedCheckNum = settings.nextCheckNum;
   window.print();
-  STATE.checkbookHistory.unshift({ id:uid('chk'), checkNum:usedCheckNum, date:v.checkDate, payee:v.payeeName, amount:amtNum, memo:v.memo, recordedBy:VIEW.userId, recordedAt:new Date().toISOString() });
+  STATE.checkbookHistory.unshift({ id:uid('chk'), checkNum:usedCheckNum, date:v.checkDate, payee:v.payeeName, payeeAddr:v.payeeAddr, amount:amtNum, memo:v.memo, recordedBy:VIEW.userId, recordedAt:new Date().toISOString() });
   STATE.checkbookHistory = STATE.checkbookHistory.slice(0,200);
   settings.nextCheckNum = usedCheckNum + 1;
   saveState(true, null, ['checkbookSettings','checkbookHistory']);
   renderContent();
   toast(`Saved check #${usedCheckNum} to history. Next check will be #${settings.nextCheckNum}.`);
+}
+// Reprints a check EXACTLY as originally recorded — same check number, same everything — for a
+// jammed printer, a smudge, or a check that needs a fresh copy for some other reason. Never
+// touches nextCheckNum and never adds a second history row, since this is explicitly the same
+// check, not a new one; a real duplicate check should be entered as a new check instead so it
+// gets its own real number. Confirms first, since printing a second physical copy of a check
+// that's already been deposited could create real confusion (or worse) at the bank.
+function checkbookReprintCheck(id){
+  if(!canManageCheckbook()){ toast('You do not have permission'); return; }
+  const h = (STATE.checkbookHistory||[]).find(x=>x.id===id);
+  if(!h){ toast('Could not find that check'); return; }
+  showConfirm(`Reprint check #${h.checkNum} to ${h.payee} for ${fmtMoney(h.amount)}? This prints an exact duplicate — the check number and everything else stays the same. Only do this if the original never reached the bank (a printer jam, a smudge, etc.), not to send a second payment.`, ()=>{
+    const out = document.getElementById('checkbookOutput');
+    if(out) out.innerHTML = buildCheckbookCheckHtml({ checkNum:h.checkNum, date:h.date, payeeName:h.payee, payeeAddr:h.payeeAddr||'', amount:h.amount, memo:h.memo });
+    window.print();
+    toast(`Reprinted check #${h.checkNum}`);
+  }, 'Reprint');
 }
 function checkbookClearHistory(){
   if(!canManageCheckbook()){ toast('You do not have permission'); return; }
@@ -20426,7 +20461,7 @@ function renderCheckbook(){
     .checkbook-module .cb-hint{ font-size:11.5px; color:#8a8571; margin-top:6px; line-height:1.4; }
     .checkbook-module .cb-warn-box{ background:#fbf1ee; border:1px solid #e6c3ba; color:var(--cb-warn); font-size:12px; padding:9px 11px; border-radius:3px; margin-bottom:14px; line-height:1.45; }
     .checkbook-module .cb-preview-shell{ background:#e3e6dc; border-radius:4px; padding:26px; }
-    .checkbook-module .check-page{ background:var(--cb-paper); width:100%; max-width:720px; margin:0 auto; box-shadow:0 2px 10px rgba(0,0,0,0.12); position:relative; padding:22px 26px 18px; border:1px solid #d8d3c0; }
+    .checkbook-module .check-page{ background:var(--cb-paper); width:100%; max-width:720px; height:3.5in; margin:0 auto; box-shadow:0 2px 10px rgba(0,0,0,0.12); position:relative; padding:22px 26px 18px; border:1px solid #d8d3c0; }
     .checkbook-module .guilloche{ position:absolute; inset:0; pointer-events:none; background-image:repeating-linear-gradient(115deg, rgba(47,82,51,0.05) 0px, rgba(47,82,51,0.05) 1px, transparent 1px, transparent 5px); }
     .checkbook-module .check-top{ display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1; }
     .checkbook-module .payer-block{ font-family:var(--cb-serif); }
@@ -20442,14 +20477,14 @@ function renderCheckbook(){
     .checkbook-module .words-line{ margin-top:10px; display:flex; align-items:baseline; gap:8px; position:relative; z-index:1; }
     .checkbook-module .words-line .val{ flex:1; border-bottom:1px solid var(--cb-ink); font-family:var(--cb-serif); font-size:13.5px; padding-bottom:3px; letter-spacing:0.2px; }
     .checkbook-module .words-line .dollars-lbl{ font-size:11px; color:var(--cb-ink-soft); }
-    .checkbook-module .bottom-row{ margin-top:26px; display:flex; justify-content:space-between; align-items:flex-end; gap:20px; position:relative; z-index:1; }
+    .checkbook-module .bottom-row{ position:absolute; left:26px; right:26px; bottom:0.95in; display:flex; justify-content:space-between; align-items:flex-end; gap:20px; z-index:1; }
     .checkbook-module .memo-block{ flex:1; }
     .checkbook-module .memo-block .lbl{ font-size:10.5px; color:var(--cb-ink-soft); }
     .checkbook-module .memo-block .line{ border-bottom:1px solid var(--cb-ink); min-height:16px; font-family:var(--cb-serif); font-size:12.5px; }
     .checkbook-module .sig-block{ width:230px; }
     .checkbook-module .sig-block .line{ border-bottom:1px solid var(--cb-ink); min-height:24px; }
     .checkbook-module .sig-block .lbl{ font-size:10.5px; color:var(--cb-ink-soft); text-align:center; margin-top:2px; }
-    .checkbook-module .micr{ margin-top:16px; font-family:var(--cb-mono); font-size:15px; letter-spacing:2px; text-align:center; position:relative; z-index:1; }
+    .checkbook-module .micr{ position:absolute; left:26px; right:26px; bottom:0.3in; font-family:var(--cb-mono); font-size:15px; letter-spacing:2px; text-align:center; z-index:1; }
     .checkbook-module .stub{ max-width:720px; margin:14px auto 0; border-top:2px dashed #b9b59f; padding-top:14px; font-size:12px; color:var(--cb-ink-soft); }
     .checkbook-module .stub table{ width:100%; border-collapse:collapse; font-size:12px; }
     .checkbook-module .stub th{ text-align:left; font-size:10.5px; letter-spacing:0.3px; color:#8a8571; border-bottom:1px solid var(--cb-paper-line); padding:4px 6px; }
@@ -20490,6 +20525,7 @@ function renderCheckbook(){
            <p class="cb-hint" style="margin:6px 0 0;">Next check #: <b style="color:var(--cb-ink);">${settings.nextCheckNum}</b></p>`
         ) : `
           <div class="cb-warn-box">Your routing and account number are stored with the rest of your school's data — the same security and access already governing everything else here. Only grant Checkbook access to people who should see full bank account details.</div>
+          <div class="cb-hint" style="margin-bottom:10px;">The bottom line (routing/account/check number) prints in the correct order and layout for a real check, but true bank MICR encoding needs a special E-13B magnetic-ink font and toner most office printers don't have. Plain toner prints a visually correct line a person (or a bank's image scanner) can read, but it isn't guaranteed to be machine-MICR-readable — check with your bank if that matters for how you deposit.</div>
           <label class="cb-label">Organization / payer name</label>
           <input class="cb-input" id="cbOrgName" value="${escapeHtml(settings.orgName)}" placeholder="e.g. Mosdos Toldos Yehuda">
           <label class="cb-label">Organization address (street)</label>
@@ -20516,6 +20552,14 @@ function renderCheckbook(){
             <input type="checkbox" id="cbSignatureEnabled" ${settings.signatureEnabled!==false?'checked':''}>
             Print this signature automatically on every check (uncheck to leave the signature line blank for a wet-ink signature instead)
           </label>
+          <label class="cb-label">Print alignment</label>
+          <div class="cb-hint" style="margin:0 0 8px;">
+            Exactly where things land on your specific printer and check stock varies — print a test check, measure how far off it is, and enter the correction here (in points; 72 points = 1 inch). Positive numbers shift right/down.
+          </div>
+          <div class="cb-row2" style="margin-bottom:12px;">
+            <div><label class="cb-label">Shift right/left (pt)</label><input class="cb-input" type="number" id="cbPrintOffsetX" value="${settings.printOffsetX||0}" step="1"></div>
+            <div><label class="cb-label">Shift down/up (pt)</label><input class="cb-input" type="number" id="cbPrintOffsetY" value="${settings.printOffsetY||0}" step="1"></div>
+          </div>
           <button class="cb-btn-primary" onclick="checkbookSaveSettings()">Save account details</button>
         `}
       </div>
@@ -20571,11 +20615,12 @@ function renderCheckbook(){
       <div class="cb-panel" style="margin-top:20px;">
         <h2>Recent checks <button class="cb-linklike" onclick="checkbookClearHistory()">clear</button></h2>
         ${history.length ? `<table class="cb-history">
-          <thead><tr><th>No.</th><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th></tr></thead>
+          <thead><tr><th>No.</th><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th><th></th></tr></thead>
           <tbody>${history.map(h=>`<tr>
             <td>#${h.checkNum}</td><td>${escapeHtml(h.date)}</td>
             <td style="font-family:inherit;">${escapeHtml(h.payee)}</td>
             <td style="text-align:right;">$${checkbookFormatMoney(h.amount)}</td>
+            <td style="text-align:right;"><button class="cb-linklike" onclick="checkbookReprintCheck('${h.id}')">🖨 Reprint</button></td>
           </tr>`).join('')}</tbody>
         </table>` : '<p class="cb-hint">No checks printed yet.</p>'}
       </div>
