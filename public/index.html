@@ -20134,7 +20134,14 @@ function buildCheckbookCheckHtml({checkNum, date, payeeName, payeeAddr, amount, 
   // by a bank's reader — this renders the standard visual layout correctly, but plain print/toner
   // makes it a visual representation for manual/image-based deposit, not true magnetic MICR. See
   // the hint text in Settings for more on this.
-  const micrLine = `\u2448${checkNum}\u2448 \u2446${routing}\u2446 ${acct}\u2448`;
+  // The E-13B-lookalike Unicode symbols (⑈ / ⑆) used here before rendered as a stray, wrong
+  // glyph on the actual printer/font in use — likely falling back to an unrelated font (possibly
+  // even an emoji font) for a code point most fonts simply don't have. Since these were only ever
+  // a cosmetic approximation of real MICR anyway (true machine-readable MICR needs a genuine
+  // E-13B font and magnetic-ink toner regardless), plain spacing is the safer choice: it's built
+  // from ordinary characters every font renders identically, with zero risk of an odd glyph
+  // showing up on a real check going out the door.
+  const micrLine = `${checkNum}     ${routing}     ${acct}`;
   // Applied to a wrapper OUTSIDE .check-page, as padding rather than margin — .check-page has its
   // own width/centering rules (max-width + margin:auto to center it in the preview, full-width at
   // print time), and stacking an offset margin directly onto that could fight with those rules or
@@ -20512,7 +20519,7 @@ function renderCheckbook(){
     .checkbook-module .sig-block{ width:230px; }
     .checkbook-module .sig-block .line{ border-bottom:1px solid var(--cb-ink); min-height:24px; }
     .checkbook-module .sig-block .lbl{ font-size:10.5px; color:var(--cb-ink-soft); text-align:center; margin-top:2px; }
-    .checkbook-module .micr{ position:absolute; left:26px; right:26px; bottom:0.3in; font-family:var(--cb-mono); font-size:15px; letter-spacing:2px; text-align:center; z-index:1; }
+    .checkbook-module .micr{ position:absolute; left:26px; right:26px; bottom:0.12in; font-family:var(--cb-mono); font-size:15px; letter-spacing:2px; text-align:center; z-index:1; }
     .checkbook-module .stub{ max-width:720px; margin:14px auto 0; border-top:2px dashed #b9b59f; padding-top:14px; font-size:12px; color:var(--cb-ink-soft); }
     .checkbook-module .stub table{ width:100%; border-collapse:collapse; font-size:12px; }
     .checkbook-module .stub th{ text-align:left; font-size:10.5px; letter-spacing:0.3px; color:#8a8571; border-bottom:1px solid var(--cb-paper-line); padding:4px 6px; }
