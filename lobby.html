@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Lobby Display</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root{ --teal:#76154A; --teal-dark:#500F32; --teal-tint:#F1E3EC; --amber:#D6941C; --amber-tint:#FBF0DA; --rose:#B23A55; --rose-tint:#F8E5E9; --ink:#2A2330; --ink-soft:#6E6674; --surface:#FFFEFB; --line:#E5DFE0; }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:var(--teal-dark);color:var(--ink);height:100vh;overflow:hidden;}
+  .wrap{display:flex;flex-direction:column;height:100vh;}
+  header{background:var(--teal-dark);color:#fff;padding:24px 40px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;}
+  header h1{margin:0;font-size:2.2vw;font-weight:700;}
+  header .clock{font-size:1.6vw;font-weight:600;text-align:right;}
+  header .clock .time{font-size:2.2vw;}
+  main{flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:minmax(150px,0.32fr) minmax(0,1fr);gap:20px;padding:24px 40px;background:var(--surface);overflow:hidden;}
+  .col{display:flex;flex-direction:column;gap:20px;min-height:0;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:24px 28px;box-shadow:0 4px 18px rgba(0,0,0,.06);display:flex;flex-direction:column;min-height:0;}
+  .card.compact{padding:14px 20px;}
+  .card h2{margin:0 0 14px;font-size:1.6vw;color:var(--teal-dark);display:flex;align-items:center;gap:10px;}
+  .card.compact h2{margin:0 0 8px;font-size:1.15vw;}
+  .card .list{overflow-y:auto;flex:1;}
+  .name-pill{display:inline-block;background:var(--rose-tint);color:var(--rose);font-size:1.15vw;font-weight:600;padding:8px 18px;border-radius:99px;margin:5px 6px 5px 0;}
+  .card.compact .name-pill{font-size:0.95vw;padding:5px 13px;margin:3px 4px 3px 0;}
+  .name-pill.staff{background:var(--amber-tint);color:#8A5A1E;}
+  .empty{color:var(--ink-soft);font-size:1.1vw;font-style:italic;}
+  .card.compact .empty{font-size:0.9vw;}
+  #announceList{display:grid;gap:14px;flex:1;min-height:0;}
+  #announceList.cols-1{grid-template-columns:1fr;grid-template-rows:1fr;}
+  #announceList.cols-2{grid-template-columns:repeat(2,1fr);grid-template-rows:1fr;}
+  #announceList.cols-3{grid-template-columns:repeat(3,1fr);grid-template-rows:1fr;}
+  #announceList.cols-4{grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);}
+  #announceList.cols-empty{grid-template-columns:1fr;grid-template-rows:1fr;display:flex;align-items:center;justify-content:center;}
+  .announcement{font-size:1.3vw;line-height:1.32;height:100%;display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center;min-height:0;gap:6px;background:#FAF7F5;border:1px solid var(--line);border-radius:12px;padding:12px;overflow:hidden;}
+  .announcement .announce-text{overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;flex-shrink:1;min-height:0;}
+  .announce-photo{display:block;max-width:100%;max-height:45%;object-fit:contain;flex-shrink:3;min-height:0;border-radius:8px;}
+  #announceList.cols-1 .announcement{font-size:1.7vw;}
+  #announceList.cols-2 .announcement{font-size:1.35vw;}
+  #announceList.cols-3 .announcement{font-size:1.1vw;}
+  #announceList.cols-4 .announcement{font-size:1.0vw;}
+  .announce-dots{display:flex;gap:8px;justify-content:center;margin-top:10px;flex-shrink:0;}
+  .announce-dots .dot{width:10px;height:10px;border-radius:50%;background:var(--line);transition:background .3s;}
+  .announce-dots .dot.active{background:var(--rose);}
+  footer{flex-shrink:0;background:var(--teal-dark);color:#EFF4F1;opacity:.7;font-size:.9vw;padding:8px 40px;text-align:right;}
+  .full-announce{grid-column:1/-1;grid-row:2;}
+  @media (max-width: 900px){
+    header h1{font-size:5vw;} header .clock{font-size:3.5vw;} header .clock .time{font-size:5vw;}
+    main{grid-template-columns:1fr;} .card h2{font-size:4vw;} .name-pill,.announcement,.empty{font-size:3.2vw;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div id="schoolBrand"><h1 id="schoolName">Loading…</h1></div>
+    <div class="clock">
+      <div id="clockDate"></div>
+      <div class="time" id="clockTime"></div>
+    </div>
+  </header>
+  <main>
+    <div class="col">
+      <div class="card compact" style="flex:1;">
+        <h2>🧒 Students Absent Today</h2>
+        <div class="list" id="studentList"><div class="empty">Loading…</div></div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card compact" style="flex:1;">
+        <h2>🧑‍🏫 Staff Absent Today</h2>
+        <div class="list" id="staffList"><div class="empty">Loading…</div></div>
+      </div>
+      <div class="card compact" id="calendarCard" style="flex:1;display:none;">
+        <h2>📅 Today</h2>
+        <div class="list" id="calendarList"></div>
+      </div>
+    </div>
+    <div class="card full-announce" id="announceCard">
+      <h2 id="announceHeading">📢 Announcements</h2>
+      <div class="list" id="announceList"></div>
+      <div class="announce-dots" id="announceDots"></div>
+    </div>
+  </main>
+  <footer>Updates automatically — last refreshed <span id="lastRefresh">—</span> · © 2026 by YSpangelet · v2026-08-17 (0168fa7)</footer>
+</div>
+<script>
+function tickClock(){
+  const now = new Date();
+  document.getElementById('clockDate').textContent = now.toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
+  document.getElementById('clockTime').textContent = now.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit'});
+}
+setInterval(tickClock, 1000); tickClock();
+
+async function loadLobbyData(){
+  try{
+    // Sent as a query param since attendance is keyed by LOCAL calendar date, not UTC — the
+    // server has no reliable way to know the school's timezone on its own, but this screen does.
+    const d = new Date();
+    const localDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const res = await fetch('/.netlify/functions/lobby?date='+localDate+'&t='+Date.now(), {cache:'no-store'});
+    const data = await res.json();
+    if(!data.ready){
+      document.getElementById('schoolBrand').innerHTML = '<h1 id="schoolName">Not set up yet</h1>';
+      return;
+    }
+    const brand = document.getElementById('schoolBrand');
+    if(data.schoolLogoDataUrl){
+      brand.innerHTML = `<img src="${data.schoolLogoDataUrl}" alt="${escapeHtml(data.schoolName||'School')}" style="max-height:8vh;max-width:340px;object-fit:contain;">`;
+    } else {
+      brand.innerHTML = `<h1 id="schoolName"></h1>`;
+      document.getElementById('schoolName').textContent = data.schoolName || 'School';
+    }
+    const studentList = document.getElementById('studentList');
+    studentList.innerHTML = data.absentStudents.length
+      ? data.absentStudents.map(n=>`<span class="name-pill">${escapeHtml(n)}</span>`).join('')
+      : '<div class="empty">No absences reported — full house today! 🎉</div>';
+    const staffList = document.getElementById('staffList');
+    staffList.innerHTML = data.absentStaff.length
+      ? data.absentStaff.map(n=>`<span class="name-pill staff">${escapeHtml(n)}</span>`).join('')
+      : '<div class="empty">All staff present today.</div>';
+    const calendarCard = document.getElementById('calendarCard');
+    const calendarToday = data.calendarToday || [];
+    if(calendarToday.length){
+      calendarCard.style.display = 'flex';
+      document.getElementById('calendarList').innerHTML = calendarToday.map(t=>`<div style="padding:4px 0;">${escapeHtml(t)}</div>`).join('');
+    } else {
+      calendarCard.style.display = 'none';
+    }
+    const announceCard = document.getElementById('announceCard');
+    LOBBY_ANNOUNCEMENTS = data.announcements || [];
+    const totalPages = Math.ceil(LOBBY_ANNOUNCEMENTS.length / PAGE_SIZE);
+    if(pageIndex >= totalPages) pageIndex = 0;
+    renderCurrentPage();
+    document.getElementById('lastRefresh').textContent = new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  }catch(e){
+    console.error('lobby load failed', e);
+  }
+}
+function escapeHtml(s){ const d=document.createElement('div'); d.textContent=String(s==null?'':s); return d.innerHTML; }
+
+// Announcements show up to 4 at a time in a grid that auto-sizes to the count (1-4 per
+// screen). Only once there are MORE than 4 does it start paging between groups of 4 — a kiosk
+// screen has no one to scroll, so paging (not scrolling) is how anything beyond 4 still gets
+// its turn on screen instead of silently running off the bottom.
+const PAGE_SIZE = 4;
+let LOBBY_ANNOUNCEMENTS = [];
+let pageIndex = 0;
+function renderCurrentPage(){
+  const list = document.getElementById('announceList');
+  const dots = document.getElementById('announceDots');
+  const heading = document.getElementById('announceHeading');
+  if(!LOBBY_ANNOUNCEMENTS.length){
+    heading.textContent = '📢 Announcements';
+    list.className = 'cols-empty';
+    list.innerHTML = '<div class="empty">No messages</div>';
+    dots.innerHTML = '';
+    return;
+  }
+  const totalPages = Math.ceil(LOBBY_ANNOUNCEMENTS.length / PAGE_SIZE);
+  const pageItems = LOBBY_ANNOUNCEMENTS.slice(pageIndex*PAGE_SIZE, pageIndex*PAGE_SIZE+PAGE_SIZE);
+  heading.textContent = LOBBY_ANNOUNCEMENTS.length>1 ? `📢 Announcements (${LOBBY_ANNOUNCEMENTS.length})` : '📢 Announcement';
+  list.className = 'cols-'+pageItems.length;
+  list.innerHTML = pageItems.map(a=>`<div class="announcement">
+    ${a.photo?`<img src="${a.photo}" class="announce-photo">`:''}
+    <div class="announce-text">${escapeHtml(a.text)}</div>
+  </div>`).join('');
+  dots.innerHTML = totalPages>1
+    ? Array.from({length:totalPages}, (_,i)=>`<span class="dot ${i===pageIndex?'active':''}"></span>`).join('')
+    : '';
+}
+setInterval(()=>{
+  const totalPages = Math.ceil(LOBBY_ANNOUNCEMENTS.length / PAGE_SIZE);
+  if(totalPages<2) return;
+  pageIndex = (pageIndex+1) % totalPages;
+  renderCurrentPage();
+}, 10000); // give each page 10s on screen before advancing to the next
+
+loadLobbyData();
+setInterval(loadLobbyData, 30000); // data-only refresh every 30s — fast, no flicker
+// Full page reload every 10 minutes — this is what actually picks up new code after a future
+// update, since a tab left open indefinitely keeps running whatever JS was loaded when it was
+// first opened, no matter how often the data itself refreshes. A kiosk screen with nobody
+// there to notice a stale version needs to heal itself on a schedule, not rely on someone
+// remembering to reload it after every deploy.
+setInterval(()=>location.reload(), 10*60*1000);
+</script>
+</body>
+</html>
