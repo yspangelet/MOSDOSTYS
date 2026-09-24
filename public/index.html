@@ -20219,8 +20219,16 @@ function buildCheckbookCheckHtml({account, checkNum, date, payeeName, payeeAddr,
   // accurate VISUAL representation (correct for manual keying and image-based/remote deposit,
   // which is how most banks process a scanned or photographed check today), but isn't guaranteed
   // to auto-read on a machine that still does magnetic recognition specifically.
-  const micrCheckNum = String(checkNum).padStart(4, '0');
-  const micrLine = `${micrCheckNum}  A${routing}A  ${acct}C`;
+  // This MICR font only defines glyphs for 0-9 and A-D (the four special symbols) — it's a
+  // narrow, purpose-built font, not a full alphabet. Anything else lands on a character this font
+  // has no glyph for at all, which typically renders as a garbled/colored placeholder box instead
+  // of failing quietly. checkNum should always be a real number by the time it gets here, but if
+  // an account saved by an older version of this app is ever missing nextCheckNum entirely,
+  // String(undefined) would produce the literal text "undefined" — real letters this font can't
+  // draw. Coercing through Number(...)||0 first guarantees only digits ever reach the MICR line,
+  // however checkNum got here.
+  const micrCheckNum = String(Number(checkNum)||0).padStart(4, '0');
+  const micrLine = `C${micrCheckNum}C  A${routing}A  ${acct}C`;
   // Applied to a wrapper OUTSIDE .check-page, as padding rather than margin — .check-page has its
   // own width/centering rules (max-width + margin:auto to center it in the preview, full-width at
   // print time), and stacking an offset margin directly onto that could fight with those rules or
@@ -20300,7 +20308,7 @@ function checkbookUpdatePreview(){
     out.innerHTML = '<div class="empty-note">Enter a payee and amount to preview the check.</div>';
     return;
   }
-  out.innerHTML = buildCheckbookCheckHtml({ account, checkNum: account.nextCheckNum, date:v.checkDate, payeeName:v.payeeName, payeeAddr:v.payeeAddr, amount:v.amount, memo:v.memo });
+  out.innerHTML = buildCheckbookCheckHtml({ account, checkNum: account.nextCheckNum||1001, date:v.checkDate, payeeName:v.payeeName, payeeAddr:v.payeeAddr, amount:v.amount, memo:v.memo });
 }
 function checkbookGetFormValues(){
   const el = id => document.getElementById(id);
@@ -20404,6 +20412,12 @@ function checkbookPrintCheck(){
   if(!isFinite(amtNum) || amtNum <= 0){ toast('Enter a valid amount greater than $0'); return; }
   if(amtNum > 1000000){ toast('That amount looks too large to be right — double-check it (checks over $1,000,000 are blocked as a safety check)'); return; }
   checkbookUpdatePreview();
+  // If this account predates nextCheckNum existing on its record at all (an account saved by an
+  // older version of this app, loaded with that field simply missing), account.nextCheckNum is
+  // undefined here rather than a number — self-healing it to 1001 the moment it's actually used,
+  // rather than only defaulting it for display elsewhere, is what stops a genuinely blank field
+  // from ever reaching the MICR line as the literal text "undefined" (see buildCheckbookCheckHtml).
+  if(!account.nextCheckNum) account.nextCheckNum = 1001;
   const usedCheckNum = account.nextCheckNum;
   // Same reasoning as checkbookReprintCheck — normally the signature <img> has already been sitting
   // rendered on screen for a while by the time this button is clicked, but a fast-enough workflow
