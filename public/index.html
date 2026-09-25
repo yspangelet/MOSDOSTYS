@@ -20262,14 +20262,11 @@ function buildCheckbookCheckHtml({account, checkNum, date, payeeName, payeeAddr,
         </div>
       </div>
       <div class="bottom-row">
-        <div class="memo-block">
-          <div class="lbl">Memo</div>
-          <div class="line">${escapeHtml(memo||'')}</div>
-        </div>
-        <div class="sig-block">
-          <div class="line" style="display:flex;align-items:flex-end;justify-content:center;">${settings.signatureEnabled!==false && settings.signatureDataUrl ? `<img src="${settings.signatureDataUrl}" style="max-width:180px;max-height:44px;margin-bottom:-4px;">` : ''}</div>
-          <div class="lbl">Authorized Signature</div>
-        </div>
+        <div class="lbl" style="grid-column:1;grid-row:1;">Memo</div>
+        <div class="line" style="grid-column:1;grid-row:2;">${escapeHtml(memo||'')}</div>
+        <div class="lbl" style="grid-column:2;grid-row:1;visibility:hidden;">&nbsp;</div>
+        <div class="line" style="grid-column:2;grid-row:2;display:flex;align-items:flex-end;justify-content:center;">${settings.signatureEnabled!==false && settings.signatureDataUrl ? `<img src="${settings.signatureDataUrl}" style="max-width:180px;max-height:44px;margin-bottom:-4px;">` : ''}</div>
+        <div class="lbl" style="grid-column:2;grid-row:3;text-align:center;">Authorized Signature</div>
       </div>
       <div class="micr">${micrLine}</div>
     </div>
@@ -20788,14 +20785,37 @@ function renderCheckbook(){
     .checkbook-module .order-lbl{ font-size:10px; font-weight:700; color:var(--cb-ink-soft); line-height:1.5; white-space:nowrap; }
     .checkbook-module .payee-name{ font-size:13.5px; font-weight:700; }
     .checkbook-module .payee-addr{ font-size:11.5px; color:var(--cb-ink-soft); line-height:1.5; margin-top:3px; }
-    .checkbook-module .bottom-row{ position:absolute; left:28px; right:28px; bottom:0.95in; display:flex; justify-content:space-between; align-items:flex-end; gap:20px; }
-    .checkbook-module .memo-block{ flex:1; }
-    .checkbook-module .memo-block .lbl{ font-size:10.5px; color:var(--cb-ink-soft); }
-    .checkbook-module .memo-block .line{ border-bottom:1px solid var(--cb-ink); min-height:16px; font-size:12.5px; }
-    .checkbook-module .sig-block{ width:230px; }
-    .checkbook-module .sig-block .line{ border-bottom:1px solid var(--cb-ink); min-height:24px; }
-    .checkbook-module .sig-block .lbl{ font-size:10.5px; color:var(--cb-ink-soft); text-align:center; margin-top:2px; }
-    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.65in; font-family:'IDAutomationMICR', var(--cb-mono); font-size:22px; letter-spacing:3px; text-align:center; }
+    .checkbook-module .bottom-row{ position:absolute; left:28px; right:28px; bottom:0.95in; display:grid; grid-template-columns:1fr 230px; grid-template-rows:auto auto auto; column-gap:20px; align-items:end; }
+    .checkbook-module .bottom-row .lbl{ font-size:10.5px; color:var(--cb-ink-soft); }
+    .checkbook-module .bottom-row .line{ border-bottom:1px solid var(--cb-ink); min-height:20px; font-size:12.5px; }
+    /* Restructured from two independent flex columns (memo on the left, signature on the right)
+       into a single 3-row grid shared by both, because that's what the person actually flagged:
+       "Memo" sits ABOVE its own line while "Authorized Signature" sits BELOW its line — real
+       check convention for both, and correct as-is — but two independent flex columns have no way
+       to know the other column's row heights, so each column's own line landed at a different
+       height: memo's line was its column's very last row, while signature's line came before its
+       caption, one row higher. A shared grid fixes this the structural way rather than by eyeballing
+       a magic-number offset: an invisible row-1 spacer of the same .lbl height on the signature
+       side keeps row 2 (the actual lines, in both columns) locked to the same height automatically,
+       leaving row 3 free for the signature's caption with nothing needed to balance it under memo. */
+    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.3in; font-family:'IDAutomationMICR', var(--cb-mono); font-size:16px; letter-spacing:normal; text-align:center; }
+    /* Moved from 0.65in down to 0.3in from the check's bottom edge — this is also more accurate,
+       not just a fix for feeling squeezed against the signature: real ANSI/ABA spec puts the
+       start of the MICR "clear band" only about 3/16in from a check's true bottom edge, so 0.65in
+       was actually much farther up than a real check places it. Moving it down both frees up the
+       room the person flagged as too tight against the signature line AND lands closer to where
+       it's actually supposed to sit. */
+    /* 16px ≈ 12pt — this isn't a look/feel choice, it's the actual point size this specific font
+       is designed around to hit the real ANSI X9.100/X9.27 E-13B character dimensions (~0.117in
+       tall) at the required fixed pitch of exactly 8 characters per inch. The earlier 22px with
+       added letter-spacing was picked for on-screen visibility, but both size and spacing are
+       genuinely spec'd values on a real check, not aesthetic ones — running oversized or with
+       extra letter-spacing thrown on top pushes the line outside the tolerance a bank's own
+       equipment checks for, which is a real, documented cause of a check being rejected on
+       these specs alone, independent of the magnetic-toner point made earlier. No letter-spacing
+       is added here for the same reason: the font's own built-in character widths are exactly
+       what produce the correct 8-characters-per-inch pitch at this size — adding spacing on top
+       would throw that off rather than improve it. */
     /* Moved up from 0.55in — that sat right down near the check's own bottom edge, which on real
        perforated check stock is close to (or past) the tear-off line, putting the routing/account
        line at risk of landing on the wrong side of the fold. 0.65in pulls it up noticeably nearer
