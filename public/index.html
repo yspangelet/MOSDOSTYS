@@ -20265,7 +20265,7 @@ function buildCheckbookCheckHtml({account, checkNum, date, payeeName, payeeAddr,
         <div class="lbl" style="grid-column:1;grid-row:1;">Memo</div>
         <div class="line" style="grid-column:1;grid-row:2;">${escapeHtml(memo||'')}</div>
         <div class="lbl" style="grid-column:2;grid-row:1;visibility:hidden;">&nbsp;</div>
-        <div class="line" style="grid-column:2;grid-row:2;display:flex;align-items:flex-end;justify-content:center;">${settings.signatureEnabled!==false && settings.signatureDataUrl ? `<img src="${settings.signatureDataUrl}" style="max-width:180px;max-height:44px;margin-bottom:-4px;">` : ''}</div>
+        <div class="line" style="grid-column:2;grid-row:2;display:flex;align-items:flex-end;justify-content:center;">${settings.signatureEnabled!==false && settings.signatureDataUrl ? `<img src="${settings.signatureDataUrl}" style="max-width:180px;max-height:22px;margin-bottom:-2px;">` : ''}</div>
         <div class="lbl" style="grid-column:2;grid-row:3;text-align:center;">Authorized Signature</div>
       </div>
       <div class="micr">${micrLine}</div>
@@ -20793,7 +20793,13 @@ function renderCheckbook(){
     .checkbook-module .order-lbl{ font-size:10px; font-weight:700; color:var(--cb-ink-soft); line-height:1.5; white-space:nowrap; }
     .checkbook-module .payee-name{ font-size:13.5px; font-weight:700; }
     .checkbook-module .payee-addr{ font-size:11.5px; color:var(--cb-ink-soft); line-height:1.5; margin-top:3px; }
-    .checkbook-module .bottom-row{ position:absolute; left:28px; right:28px; bottom:0.72in; display:grid; grid-template-columns:1fr 230px; grid-template-rows:auto auto auto; column-gap:20px; align-items:end; }
+    .checkbook-module .bottom-row{ position:absolute; left:28px; right:28px; bottom:0.72in; display:grid; grid-template-columns:1fr 230px; grid-template-rows:14px 22px 14px; column-gap:20px; align-items:end; }
+    /* Rows are fixed pixel heights now, not "auto" — a real uploaded signature image varies in
+       size a lot more than a test placeholder does, and with "auto" rows, a tall real signature
+       was quietly growing the whole row taller and pushing it up into the order-row above it
+       (the "Memo" / "To The Order Of" overlap). Fixed rows make this row's total height always
+       the same regardless of what image is dropped in — the signature image's own max-height is
+       capped below the middle row's 22px so it can never be the thing that grows the row. */
     .checkbook-module .bottom-row .lbl{ font-size:10.5px; color:var(--cb-ink-soft); }
     .checkbook-module .bottom-row .line{ border-bottom:1px solid var(--cb-ink); min-height:20px; font-size:12.5px; }
     /* Restructured from two independent flex columns (memo on the left, signature on the right)
@@ -20806,7 +20812,7 @@ function renderCheckbook(){
        a magic-number offset: an invisible row-1 spacer of the same .lbl height on the signature
        side keeps row 2 (the actual lines, in both columns) locked to the same height automatically,
        leaving row 3 free for the signature's caption with nothing needed to balance it under memo. */
-    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.15in; font-family:'IDAutomationMICR', var(--cb-mono); font-size:16px; letter-spacing:normal; text-align:center; }
+    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.45in; font-family:'IDAutomationMICR', var(--cb-mono); font-size:16px; letter-spacing:normal; text-align:center; }
     /* Moved from 0.65in down to 0.3in from the check's bottom edge — this is also more accurate,
        not just a fix for feeling squeezed against the signature: real ANSI/ABA spec puts the
        start of the MICR "clear band" only about 3/16in from a check's true bottom edge, so 0.65in
