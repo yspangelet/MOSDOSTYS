@@ -20754,7 +20754,15 @@ function renderCheckbook(){
     .checkbook-module .cb-hint{ font-size:11.5px; color:#8a8571; margin-top:6px; line-height:1.4; }
     .checkbook-module .cb-warn-box{ background:#fbf1ee; border:1px solid #e6c3ba; color:var(--cb-warn); font-size:12px; padding:9px 11px; border-radius:3px; margin-bottom:14px; line-height:1.45; }
     .checkbook-module .cb-preview-shell{ background:#e3e6dc; border-radius:4px; padding:26px; }
-    .checkbook-module .check-page{ background:#fff; width:100%; max-width:720px; height:3.95in; margin:0 auto; box-shadow:0 2px 10px rgba(0,0,0,0.12); position:relative; padding:22px 28px 18px; border:1px solid #d8d3c0; font-family:var(--cb-serif); }
+    .checkbook-module .check-page{ background:#fff; width:100%; max-width:720px; height:3.5in; margin:0 auto; box-shadow:0 2px 10px rgba(0,0,0,0.12); position:relative; padding:18px 28px 14px; border:1px solid #d8d3c0; font-family:var(--cb-serif); }
+    /* 3.5in, not a rounder-looking 3.85-3.95in tried earlier for breathing room — this is the
+       actual, specific height of the check portion on VersaCheck Form #1000 (Prestige and other
+       colors): one check on the top third of an 8.5x11 sheet, micro-perforated at exactly 3.5",
+       7", and 10.5" from the top edge. Anything printed past 3.5in from this box's own top edge
+       lands on the paper's PERFORATED STUB area instead of the check itself — which is exactly
+       what happened when this was stretched taller for spacing in an earlier pass without
+       checking it against the real paper's own cut line. Every absolute-positioned element below
+       (.bottom-row, .micr) is measured to fit inside this exact height, not a taller one. */
     /* Redesigned to match a plain, traditional business-check layout (org name/address top-left,
        Check Date/Check Number top-right, Pay/Amount row, To The Order Of block, Memo/Signature
        row, MICR line at the very bottom) instead of the earlier boxed-amount/watermarked style.
@@ -20774,18 +20782,18 @@ function renderCheckbook(){
     .checkbook-module .meta-lbl{ font-size:10px; font-weight:700; color:var(--cb-ink-soft); white-space:nowrap; }
     .checkbook-module .meta-val{ font-size:13px; margin-top:4px; }
     .checkbook-module .meta-checknum{ font-weight:700; }
-    .checkbook-module .bank-line{ text-align:center; font-size:11px; color:var(--cb-ink-soft); margin-top:14px; }
-    .checkbook-module .pay-row{ margin-top:22px; display:flex; align-items:flex-end; gap:12px; }
+    .checkbook-module .bank-line{ text-align:center; font-size:11px; color:var(--cb-ink-soft); margin-top:8px; }
+    .checkbook-module .pay-row{ margin-top:14px; display:flex; align-items:flex-end; gap:12px; }
     .checkbook-module .pay-lbl{ font-size:12.5px; font-weight:700; padding-bottom:3px; }
     .checkbook-module .words-fill{ flex:1; border-bottom:1px solid var(--cb-ink); font-size:13.5px; font-weight:700; padding-bottom:3px; letter-spacing:0.2px; }
     .checkbook-module .amount-col{ text-align:right; white-space:nowrap; }
     .checkbook-module .amount-lbl{ font-size:10px; font-weight:700; color:var(--cb-ink-soft); }
     .checkbook-module .amount-val{ font-size:15px; font-weight:700; margin-top:2px; }
-    .checkbook-module .order-row{ margin-top:22px; display:flex; gap:14px; }
+    .checkbook-module .order-row{ margin-top:14px; display:flex; gap:14px; }
     .checkbook-module .order-lbl{ font-size:10px; font-weight:700; color:var(--cb-ink-soft); line-height:1.5; white-space:nowrap; }
     .checkbook-module .payee-name{ font-size:13.5px; font-weight:700; }
     .checkbook-module .payee-addr{ font-size:11.5px; color:var(--cb-ink-soft); line-height:1.5; margin-top:3px; }
-    .checkbook-module .bottom-row{ position:absolute; left:28px; right:28px; bottom:0.95in; display:grid; grid-template-columns:1fr 230px; grid-template-rows:auto auto auto; column-gap:20px; align-items:end; }
+    .checkbook-module .bottom-row{ position:absolute; left:28px; right:28px; bottom:0.72in; display:grid; grid-template-columns:1fr 230px; grid-template-rows:auto auto auto; column-gap:20px; align-items:end; }
     .checkbook-module .bottom-row .lbl{ font-size:10.5px; color:var(--cb-ink-soft); }
     .checkbook-module .bottom-row .line{ border-bottom:1px solid var(--cb-ink); min-height:20px; font-size:12.5px; }
     /* Restructured from two independent flex columns (memo on the left, signature on the right)
@@ -20798,7 +20806,7 @@ function renderCheckbook(){
        a magic-number offset: an invisible row-1 spacer of the same .lbl height on the signature
        side keeps row 2 (the actual lines, in both columns) locked to the same height automatically,
        leaving row 3 free for the signature's caption with nothing needed to balance it under memo. */
-    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.3in; font-family:'IDAutomationMICR', var(--cb-mono); font-size:16px; letter-spacing:normal; text-align:center; }
+    .checkbook-module .micr{ position:absolute; left:28px; right:28px; bottom:0.15in; font-family:'IDAutomationMICR', var(--cb-mono); font-size:16px; letter-spacing:normal; text-align:center; }
     /* Moved from 0.65in down to 0.3in from the check's bottom edge — this is also more accurate,
        not just a fix for feeling squeezed against the signature: real ANSI/ABA spec puts the
        start of the MICR "clear band" only about 3/16in from a check's true bottom edge, so 0.65in
