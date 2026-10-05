@@ -26,7 +26,14 @@
     X-Frame-Options = "DENY"
     Referrer-Policy = "same-origin"
     Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
-    Permissions-Policy = "geolocation=(self), microphone=(), camera=()"
+    # microphone=(self) — not (), as it was before the Broadcast feature's voice-recording option
+    # was added. That () explicitly forbids microphone access for every origin, including the
+    # site's own — a server-sent header the browser enforces before a person ever gets a chance to
+    # see a permission prompt, let alone grant one. No amount of allowing it in the browser's own
+    # site settings gets past that: the page is blocked from even asking. (self) permits it only
+    # for this site's own origin, same as geolocation already was, while still blocking it for any
+    # embedded third-party content exactly like before.
+    Permissions-Policy = "geolocation=(self), microphone=(self), camera=()"
 
 [[headers]]
   for = "/lobby.html"
