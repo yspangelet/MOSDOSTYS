@@ -3127,9 +3127,10 @@ const PERMISSION_DEFS = [
   {key:'viewTransportReports', label:'View transportation reports (on-time %, ridership, incidents)', category:'Transportation'},
   {key:'manageTransportNotifications', label:'Connect/manage the Parent Line phone number and SMS alerts (Twilio account credentials)', category:'Transportation'},
   {key:'sendTransportBroadcasts', label:'Send broadcast messages/calls to parents about transportation (a route, a Custom Route, or everyone) — separate from route-editing or report-viewing, since this reaches real people\'s phones', category:'Transportation'},
+  {key:'sendStudentBroadcasts', label:'Send broadcast messages/calls to parents about anything school-wide (one student, several, or everyone) — separate from sendTransportBroadcasts, which only covers transportation-specific alerts', category:'Broadcast'},
 ];
 // Grouped once, in a fixed category order, for the redesigned matrix below.
-const PERMISSION_CATEGORY_ORDER = ['Daily editing','Deleting things','Reports & templates','Oversight & visibility','School configuration','Accounts & security','Meetings & communication','Billing','Checkbook','Fundraising','Families','Registration','HR / Staff Intake','Transportation'];
+const PERMISSION_CATEGORY_ORDER = ['Daily editing','Deleting things','Reports & templates','Oversight & visibility','School configuration','Accounts & security','Meetings & communication','Billing','Checkbook','Fundraising','Families','Registration','HR / Staff Intake','Transportation','Broadcast'];
 function permissionDefsByCategory(){
   return PERMISSION_CATEGORY_ORDER.map(cat=>({ name:cat, items: PERMISSION_DEFS.filter(p=>p.category===cat) })).filter(g=>g.items.length);
 }
@@ -3763,6 +3764,7 @@ function render(){
           ${(currentStaff().role==='Admin' || can('manageCheckbook'))? navItem('checkbook','📒','Checkbook') : ''}
           ${(currentStaff().role==='Admin' || can('manageFamilies') || can('viewFamilies'))? navItem('families','👪','Families') : ''}
           ${(currentStaff().role==='Admin' || can('manageTransportSetup') || can('manageTransportRoutes') || can('viewTransportReports') || can('manageTransportNotifications') || can('sendTransportBroadcasts') || isAssignedToAnyRoute(VIEW.userId))? navItem('transportation','🚌','Transportation') : ''}
+          ${(currentStaff().role==='Admin' || can('sendStudentBroadcasts'))? navItem('broadcast','📢','Broadcast') : ''}
           ${roleCanSeeTab(currentStaff().role,'printcenter')? navItem('printcenter','🖨️','Print &amp; Document Center') : ''}
           ${roleCanSeeTab(currentStaff().role,'search')? navItem('search','🔍','Search') : ''}
           ${can('viewOversight')? navItem('oversight','🔎','Oversight') : ''}
@@ -3914,7 +3916,7 @@ function renderContent(){
   // a box scrolled to a totally different, wrong part of a screen scrolled well past the top.
   const savedWindowScrollY = preserveScroll ? window.scrollY : 0;
   const fns = {dashboard:renderDashboard, students:renderStudentProfileSection, staff:renderStaffProfileSection, setup:renderSetup, servicereqs:renderServiceRequirements, schedule:renderSchedule, calendar:renderSchoolCalendar, attendance:renderAttendance,
-    notes:renderNotes, lessonplans:renderLessonPlans, teammeetings:renderTeamMeetings, leadershipmeetings:renderLeadershipMeetings, printcenter:renderPrintCenter, reports:renderReports, search:renderSearch, messages:renderMessages, contacts:renderContacts, oversight:renderOversight, auditlog:renderAuditLog, billing:renderBilling, checkbook:renderCheckbook, fundraising:renderFundraising, families:renderFamilies, registration:renderRegistration, hireapps:renderHireApplications, transportation:renderTransportation, onboardingDocReview:renderOnboardingDocReview, settings:renderSettings};
+    notes:renderNotes, lessonplans:renderLessonPlans, teammeetings:renderTeamMeetings, leadershipmeetings:renderLeadershipMeetings, printcenter:renderPrintCenter, reports:renderReports, search:renderSearch, messages:renderMessages, contacts:renderContacts, oversight:renderOversight, auditlog:renderAuditLog, billing:renderBilling, checkbook:renderCheckbook, fundraising:renderFundraising, families:renderFamilies, registration:renderRegistration, hireapps:renderHireApplications, transportation:renderTransportation, broadcast:renderBroadcast, onboardingDocReview:renderOnboardingDocReview, settings:renderSettings};
   try{
     c.innerHTML = fns[VIEW.tab]();
     afterRenderHooks[VIEW.tab] && afterRenderHooks[VIEW.tab]();
@@ -26065,6 +26067,354 @@ function phoneNumbersForAllTransportation(){
   STATE.transportRoutes.forEach(r=>{ const n=phoneNumbersForRoute(r.id); n.call.forEach(x=>call.add(x)); n.sms.forEach(x=>sms.add(x)); });
   STATE.transportCustomTrips.forEach(t=>{ const n=phoneNumbersForCustomTrip(t.id); n.call.forEach(x=>call.add(x)); n.sms.forEach(x=>sms.add(x)); });
   return {call:[...call], sms:[...sms]};
+}
+// Same {call, sms} shape and the exact same consent rule as the transportation broadcast above
+// (studentParentContacts for calls — a phone call isn't gated by texting consent — vs
+// studentTextableContacts for texts, which only includes parents who've actually said yes on
+// "Can text?") — reused as-is rather than re-decided here, since this is the same underlying
+// question ("can we reach this family this way") asked from the Students side instead of the
+// Transportation side.
+function phoneNumbersForStudents(studentIds){
+  const idSet = new Set(studentIds);
+  const call = new Set(), sms = new Set();
+  studentsOfYear().filter(s=>idSet.has(s.id)).forEach(student=>{
+    studentParentContacts(student).forEach(c=>call.add(c.phone));
+    studentTextableContacts(student).forEach(c=>sms.add(c.phone));
+  });
+  return {call:[...call], sms:[...sms]};
+}
+function phoneNumbersForAllStudents(){
+  return phoneNumbersForStudents(studentsOfYear().map(s=>s.id));
+}
+
+/* ==================== Broadcast (all students / selected students) ====================
+   Deliberately its own tab/permission rather than folded into the Transportation broadcast
+   above — sendTransportBroadcasts is scoped to transportation alerts specifically, and someone
+   who can text parents about a late bus shouldn't automatically be able to robo-call the entire
+   school about anything else. Reuses the exact same send mechanics (transport-sms.js,
+   transport-call.js, logBroadcastHistory) since the underlying job — reach some phone numbers,
+   by text and/or voice — is identical either way; only the recipient-picking UI and permission
+   differ. Adds one real capability neither broadcast had before: recording your own voice message
+   in the browser and having the call play that back, instead of only ever reading typed text
+   aloud via text-to-speech. */
+function renderBroadcast(){
+  if(!(currentStaff().role==='Admin' || can('sendStudentBroadcasts'))){
+    return `<div class="empty-state">🔒 You don't have permission to send broadcasts.<br><span class="small">Ask an Admin to grant "Send broadcast messages/calls to parents about anything school-wide" in Settings → Roles &amp; Permissions.</span></div>`;
+  }
+  const students = studentsOfYear().slice().sort((a,b)=>a.name.localeCompare(b.name));
+  return `<div class="card" style="max-width:640px;">
+    <h3 style="margin-top:0;">📢 Broadcast to parents</h3>
+    <div class="muted small" style="margin-bottom:14px;">One message — by text, by a call that reads it aloud, or by a call that plays back your own recorded voice — to every student, or just the ones you pick. Texts only reach contacts who've opted in; see each family's "Can text?" setting.</div>
+    <div class="form-row"><label>Send to</label>
+      <select id="bcTargetKind" onchange="document.getElementById('bcStudentPicker').style.display=this.value==='selected'?'block':'none';">
+        <option value="all">All students (${students.length})</option>
+        <option value="selected">Select specific students</option>
+      </select>
+    </div>
+    <div id="bcStudentPicker" style="display:none;margin-bottom:10px;">
+      <input class="small" placeholder="Search students…" style="width:100%;margin-bottom:6px;" oninput="filterBroadcastStudentList(this.value)">
+      <div id="bcStudentList" style="max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:6px 10px;">
+        ${students.map(s=>`<label class="bc-student-row" data-name="${escapeHtml(s.name.toLowerCase())}" style="display:flex;align-items:center;gap:8px;font-weight:400;padding:3px 0;"><input type="checkbox" class="bcStudentCb" value="${s.id}"> ${escapeHtml(s.name)}</label>`).join('') || '<div class="muted small">No students on file.</div>'}
+      </div>
+    </div>
+    <button class="btn" onclick="openStudentBroadcastModal()">Continue</button>
+    <button class="btn-ghost btn" style="margin-left:8px;" onclick="renderBroadcastHistoryModal()">📜 Broadcast history</button>
+  </div>`;
+}
+function filterBroadcastStudentList(term){
+  term = term.trim().toLowerCase();
+  document.querySelectorAll('.bc-student-row').forEach(row=>{
+    row.style.display = !term || row.dataset.name.includes(term) ? 'flex' : 'none';
+  });
+}
+function openStudentBroadcastModal(){
+  const kind = document.getElementById('bcTargetKind').value;
+  let targetLabel, nums, studentIds;
+  if(kind==='selected'){
+    studentIds = [...document.querySelectorAll('.bcStudentCb:checked')].map(cb=>cb.value);
+    if(!studentIds.length){ toast('Select at least one student'); return; }
+    targetLabel = studentIds.length===1 ? studentName(studentIds[0]) : `${studentIds.length} selected students`;
+    nums = phoneNumbersForStudents(studentIds);
+  } else {
+    targetLabel = `all ${studentsOfYear().length} students`;
+    nums = phoneNumbersForAllStudents();
+  }
+  window.__bcCallNumbers = nums.call;
+  window.__bcSmsNumbers = nums.sms;
+  window.__bcLabel = targetLabel;
+  window.__bcRecordedAudioBlob = null;
+  const anyNumbers = nums.call.length || nums.sms.length;
+  showModal(`<h3>📢 Broadcast — ${escapeHtml(targetLabel)}</h3>
+    <div class="small muted" style="margin-bottom:10px;">${nums.call.length} phone number${nums.call.length===1?'':'s'} on file for calls · ${nums.sms.length} opted in to texting${anyNumbers?'':' — nothing to send to yet.'}</div>
+    <div class="form-row"><label>How do you want to send this?</label>
+      <select id="bcChannel" onchange="bcChannelChanged()">
+        <option value="sms">💬 Text message only</option>
+        <option value="call_tts">📞 Call — type a message, read aloud</option>
+        <option value="call_voice">🎙 Call — play my own recorded voice</option>
+        <option value="sms_tts">💬 Text + 📞 Call (read aloud)</option>
+      </select>
+    </div>
+    <div id="bcMessageWrap" class="form-row"><label>Message</label><textarea id="bcMessage" placeholder="e.g. Tomorrow is a half day — dismissal is at 12:00pm."></textarea></div>
+    <div id="bcRecordWrap" style="display:none;">
+      <label>Your recorded message</label>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button type="button" class="btn-ghost btn" id="bcRecordBtn" onclick="toggleBroadcastRecording()">🎙 Start recording</button>
+        <span id="bcRecordStatus" class="small muted"></span>
+      </div>
+      <audio id="bcRecordPlayback" controls style="display:none;margin-top:8px;width:100%;"></audio>
+    </div>
+    <div id="bcProgress" class="small muted" style="margin-top:8px;"></div>
+    <div class="modal-actions"><button class="btn-ghost btn" onclick="stopBroadcastRecordingStream();closeModal()">Cancel</button><button class="btn" id="bcSendBtn" onclick="confirmSendStudentBroadcast()" ${anyNumbers?'':'disabled'}>Send</button></div>`, true);
+}
+function bcChannelChanged(){
+  const channel = document.getElementById('bcChannel').value;
+  document.getElementById('bcMessageWrap').style.display = channel==='call_voice' ? 'none' : 'block';
+  document.getElementById('bcRecordWrap').style.display = channel==='call_voice' ? 'block' : 'none';
+}
+// Deliberately NOT MediaRecorder, even though it's the obvious/simpler browser API for this —
+// MediaRecorder only ever produces compressed container formats (webm/Opus in Chrome & Firefox,
+// mp4/AAC in Safari), and Twilio's own <Play> verb documentation lists exactly five formats it
+// accepts: MP3, WAV, AIFF, GSM, and μ-law — webm and mp4 are both absent from that list. Pointing
+// <Play> at either produces Twilio error 13420 ("Play: Invalid Content-Type") and the call plays
+// nothing at all, discovered by actually checking Twilio's supported-format list against what
+// MediaRecorder can produce, not by assuming the obvious browser API would just work end to end.
+// Capturing raw PCM via the Web Audio API below and hand-encoding a WAV file sidesteps the whole
+// problem: WAV is on Twilio's supported list, and a WAV file is simple enough to assemble by hand
+// (see encodeWavFromSamples) without pulling in any transcoding library or server-side step.
+window.__bcAudioCtx = null;
+window.__bcMediaStream = null;
+window.__bcScriptNode = null;
+window.__bcRecordedChunks = null;
+window.__bcRecordTimer = null;
+const BC_MAX_RECORD_SECONDS = 180; // 3 minutes — a generous ceiling for a broadcast voice note, and one that keeps the resulting uncompressed WAV comfortably under the backend's upload size limit
+async function toggleBroadcastRecording(){
+  const btn = document.getElementById('bcRecordBtn');
+  const status = document.getElementById('bcRecordStatus');
+  if(window.__bcAudioCtx){ finishBroadcastRecording(); return; } // already recording -> this click means Stop
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.AudioContext){
+    toast('This browser cannot record audio — try Chrome, Safari, or Edge.'); return;
+  }
+  let stream;
+  try{ stream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ toast('Microphone access was blocked — allow it in your browser\'s site settings to record a voice message.'); return; }
+  window.__bcMediaStream = stream;
+  const audioCtx = new AudioContext();
+  window.__bcAudioCtx = audioCtx;
+  const source = audioCtx.createMediaStreamSource(stream);
+  // ScriptProcessorNode is formally deprecated in favor of AudioWorklet, but AudioWorklet needs
+  // its own separate module file loaded via addModule() — real overhead for what's a short-lived
+  // recording utility, and ScriptProcessorNode remains fully supported in every browser that
+  // matters here. 4096-sample buffer, mono (1 in, 1 out) is plenty of resolution for a voice call.
+  const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  window.__bcScriptNode = processor;
+  const chunks = [];
+  window.__bcRecordedChunks = chunks;
+  processor.onaudioprocess = (e)=>{ chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  source.connect(processor);
+  // Must connect to a destination for onaudioprocess to actually fire in every browser (Chrome in
+  // particular silently stops calling it otherwise) — routed through a silent gain node rather
+  // than straight to speakers so the person recording doesn't hear their own voice echoed back.
+  const silentGain = audioCtx.createGain();
+  silentGain.gain.value = 0;
+  processor.connect(silentGain);
+  silentGain.connect(audioCtx.destination);
+  let elapsed = 0;
+  if(status) status.textContent = 'Recording… 0:00';
+  window.__bcRecordTimer = setInterval(()=>{
+    elapsed++;
+    const m = Math.floor(elapsed/60), s = String(elapsed%60).padStart(2,'0');
+    if(status) status.textContent = `Recording… ${m}:${s}`;
+    if(elapsed>=BC_MAX_RECORD_SECONDS){ toast('Reached the 3-minute limit — stopped automatically.'); finishBroadcastRecording(); }
+  }, 1000);
+  if(btn) btn.textContent = '⏹ Stop recording';
+}
+function finishBroadcastRecording(){
+  const btn = document.getElementById('bcRecordBtn');
+  const status = document.getElementById('bcRecordStatus');
+  clearInterval(window.__bcRecordTimer); window.__bcRecordTimer = null;
+  const audioCtx = window.__bcAudioCtx;
+  const sampleRate = audioCtx ? audioCtx.sampleRate : 44100;
+  const chunks = window.__bcRecordedChunks || [];
+  stopBroadcastRecordingStream(); // tears down the stream/context/processor; must happen before using sampleRate above would be too late, so sampleRate is captured first
+  if(!chunks.length){ if(status) status.textContent = 'No audio captured — try again.'; if(btn) btn.textContent = '🎙 Start recording'; return; }
+  const totalLength = chunks.reduce((sum,c)=>sum+c.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  chunks.forEach(c=>{ merged.set(c, offset); offset += c.length; });
+  const blob = encodeWavFromSamples(sampleRate, merged);
+  window.__bcRecordedAudioBlob = blob;
+  const audioEl = document.getElementById('bcRecordPlayback');
+  if(audioEl){ audioEl.src = URL.createObjectURL(blob); audioEl.style.display='block'; }
+  if(btn) btn.textContent = '🎙 Re-record';
+  if(status) status.textContent = `Recorded ${Math.round(blob.size/1024)}KB — preview below before sending.`;
+}
+// Hand-rolled 16-bit PCM mono WAV encoder — the entire reason recording uses the Web Audio API
+// instead of the much simpler MediaRecorder (see the comment above toggleBroadcastRecording).
+// A WAV file is just a 44-byte header describing the format, followed by raw sample data, which
+// is simple and well-documented enough to assemble directly with no library.
+function encodeWavFromSamples(sampleRate, floatSamples){
+  const numSamples = floatSamples.length;
+  const bytesPerSample = 2; // 16-bit
+  const buffer = new ArrayBuffer(44 + numSamples*bytesPerSample);
+  const view = new DataView(buffer);
+  function writeString(offset, str){ for(let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples*bytesPerSample, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);        // fmt chunk size
+  view.setUint16(20, 1, true);         // PCM format
+  view.setUint16(22, 1, true);         // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate*bytesPerSample, true); // byte rate
+  view.setUint16(32, bytesPerSample, true);            // block align
+  view.setUint16(34, 16, true);        // bits per sample
+  writeString(36, 'data');
+  view.setUint32(40, numSamples*bytesPerSample, true);
+  let offset = 44;
+  for(let i=0;i<numSamples;i++){
+    const clamped = Math.max(-1, Math.min(1, floatSamples[i]));
+    view.setInt16(offset, clamped<0 ? clamped*0x8000 : clamped*0x7FFF, true);
+    offset += 2;
+  }
+  return new Blob([buffer], {type:'audio/wav'});
+}
+// Called on Cancel and after a successful send — a recording left running (or a mic left "hot"
+// because the person closed the modal mid-recording instead of clicking Stop) would otherwise
+// keep the browser's mic-in-use indicator on indefinitely.
+function stopBroadcastRecordingStream(){
+  clearInterval(window.__bcRecordTimer); window.__bcRecordTimer = null;
+  if(window.__bcScriptNode){ window.__bcScriptNode.disconnect(); window.__bcScriptNode.onaudioprocess = null; window.__bcScriptNode = null; }
+  if(window.__bcAudioCtx){ window.__bcAudioCtx.close().catch(()=>{}); window.__bcAudioCtx = null; }
+  if(window.__bcMediaStream){ window.__bcMediaStream.getTracks().forEach(t=>t.stop()); window.__bcMediaStream = null; }
+}
+function confirmSendStudentBroadcast(){
+  const channel = document.getElementById('bcChannel').value;
+  const viaSms = channel==='sms' || channel==='sms_tts';
+  const viaCallTts = channel==='call_tts' || channel==='sms_tts';
+  const viaCallVoice = channel==='call_voice';
+  const message = document.getElementById('bcMessage') ? document.getElementById('bcMessage').value.trim() : '';
+  if((viaSms || viaCallTts) && !message){ toast('Enter a message first'); return; }
+  if(viaCallVoice && !window.__bcRecordedAudioBlob){ toast('Record a voice message first'); return; }
+  const smsNumbers = window.__bcSmsNumbers||[];
+  const callNumbers = window.__bcCallNumbers||[];
+  const reachedCount = new Set([...((viaSms)?smsNumbers:[]), ...((viaCallTts||viaCallVoice)?callNumbers:[])]).size;
+  if(!reachedCount){ toast(viaSms && !viaCallTts && !viaCallVoice ? 'No one in this group has opted in to texting yet' : 'No phone numbers on file for this'); return; }
+  const methodLabel = [viaSms&&'text', viaCallTts&&'call (read aloud)', viaCallVoice&&'call (your recorded voice)'].filter(Boolean).join(' and ');
+  showConfirm(`Send to ${reachedCount} phone number(s) for ${window.__bcLabel}, by ${methodLabel}? This can't be undone once sent.`, ()=>sendStudentBroadcast(channel, message), 'Send now');
+}
+// Twilio's own documented defaults: calls are placed at 1 per second (CPS) per account, and SMS
+// at 1 segment per second (MPS) per sending number — both apply account/number-wide, not just to
+// this one broadcast, so a request that arrives faster than that gets throttled by Twilio itself
+// (queued for calls; queued per-number for SMS) rather than failing outright. The real risk isn't
+// a hard failure, it's an API-level 429 on the request to CREATE the call/message, which is a
+// documented, separate limit from the CPS/MPS execution rate (see Twilio-Concurrent-Requests in
+// their API docs) — more likely to fire the faster this loop's own network round-trips happen to
+// be. A fixed minimum spacing keeps this well under either limit regardless of how fast the
+// connection is, and a real retry-with-backoff on 429 specifically (not a silent failure count)
+// means a transient throttle during a 50-60 person send recovers on its own instead of quietly
+// dropping whoever happened to land on the wrong side of a rate window.
+const BC_MIN_CALL_SPACING_MS = 1100; // just over Twilio's 1 CPS default
+const BC_MIN_SMS_SPACING_MS = 350;   // SMS's 1 MPS default is per-number, not per-recipient, and typically has more headroom than voice in practice; still throttled, just less conservatively
+function bcSleep(ms){ return new Promise(resolve=>setTimeout(resolve, ms)); }
+// Retries only on 429 (rate-limited) — any other failure (bad number, Twilio account issue, etc.)
+// is a real failure and reported as one, not silently retried into a false "success."
+async function bcSendWithRetry(path, body, maxRetries){
+  maxRetries = maxRetries==null ? 3 : maxRetries;
+  let delay = 1500;
+  for(let attempt=0; attempt<=maxRetries; attempt++){
+    let res;
+    try{ res = await backendFetch(path, {method:'POST', body: JSON.stringify(body)}); }
+    catch(e){ return {ok:false, rateLimited:false}; }
+    if(res.ok) return {ok:true};
+    if(res.status===429 && attempt<maxRetries){ await bcSleep(delay); delay *= 2; continue; }
+    return {ok:false, rateLimited: res.status===429};
+  }
+  return {ok:false, rateLimited:true};
+}
+// Warns before leaving the tab while a send is in progress — for 50-60 recipients this loop can
+// genuinely run the better part of a minute (see the spacing above), and this whole send lives in
+// the browser tab, not in one long-running server-side job. Closing the tab, navigating away, or
+// the device sleeping mid-send stops it exactly where it is, with no way for it to pick back up —
+// whoever hadn't been reached yet simply never gets contacted, with nothing in the UI to say so
+// unless this guard is here to stop that from happening unnoticed.
+function bcBeforeUnloadGuard(e){ e.preventDefault(); e.returnValue = ''; }
+async function sendStudentBroadcast(channel, message){
+  const viaSms = channel==='sms' || channel==='sms_tts';
+  const viaCallTts = channel==='call_tts' || channel==='sms_tts';
+  const viaCallVoice = channel==='call_voice';
+  const smsNumbers = new Set(window.__bcSmsNumbers||[]);
+  const callNumbers = window.__bcCallNumbers||[];
+  const progressEl = document.getElementById('bcProgress');
+  const sendBtn = document.getElementById('bcSendBtn');
+  if(sendBtn) sendBtn.disabled = true;
+  let audioUrl = null;
+  if(viaCallVoice){
+    if(progressEl) progressEl.textContent = 'Uploading your recording…';
+    try{
+      audioUrl = await uploadBroadcastAudio(window.__bcRecordedAudioBlob);
+    }catch(e){
+      toast('Could not upload the recording: ' + (e.message||'try again'));
+      if(sendBtn) sendBtn.disabled = false;
+      return;
+    }
+  }
+  const allNumbers = [...new Set([...(viaSms?[...smsNumbers]:[]), ...((viaCallTts||viaCallVoice)?callNumbers:[])])];
+  window.addEventListener('beforeunload', bcBeforeUnloadGuard);
+  let smsSent=0, smsFailed=0, smsSkipped=0, callSent=0, callFailed=0, rateLimitedCount=0;
+  for(let i=0;i<allNumbers.length;i++){
+    const to = allNumbers[i];
+    const etaSec = Math.ceil((allNumbers.length-i) * ((viaCallTts||viaCallVoice) ? BC_MIN_CALL_SPACING_MS : BC_MIN_SMS_SPACING_MS) / 1000);
+    if(progressEl) progressEl.textContent = `Sending ${i+1}/${allNumbers.length}… (about ${etaSec}s left — please keep this tab open)`;
+    const callStart = Date.now();
+    if(viaSms){
+      if(smsNumbers.has(to)){
+        const r = await bcSendWithRetry('/transport-sms', {to, message});
+        if(r.ok) smsSent++; else { smsFailed++; if(r.rateLimited) rateLimitedCount++; }
+        await bcSleep(Math.max(0, BC_MIN_SMS_SPACING_MS - (Date.now()-callStart)));
+      } else smsSkipped++;
+    }
+    if(viaCallTts){
+      const callStart2 = Date.now();
+      const r = await bcSendWithRetry('/transport-call', {to, message});
+      if(r.ok) callSent++; else { callFailed++; if(r.rateLimited) rateLimitedCount++; }
+      await bcSleep(Math.max(0, BC_MIN_CALL_SPACING_MS - (Date.now()-callStart2)));
+    }
+    if(viaCallVoice){
+      const callStart2 = Date.now();
+      const r = await bcSendWithRetry('/broadcast-voice-call', {to, audioUrl});
+      if(r.ok) callSent++; else { callFailed++; if(r.rateLimited) rateLimitedCount++; }
+      await bcSleep(Math.max(0, BC_MIN_CALL_SPACING_MS - (Date.now()-callStart2)));
+    }
+  }
+  window.removeEventListener('beforeunload', bcBeforeUnloadGuard);
+  stopBroadcastRecordingStream();
+  const parts = [];
+  if(viaSms) parts.push(`${smsSent} text(s) sent${smsFailed?`, ${smsFailed} failed`:''}${smsSkipped?`, ${smsSkipped} skipped (not opted in to texting)`:''}`);
+  if(viaCallTts||viaCallVoice) parts.push(`${callSent} call(s) placed${callFailed?`, ${callFailed} failed`:''}`);
+  if(rateLimitedCount) parts.push(`${rateLimitedCount} hit Twilio's rate limit even after retrying — try resending to just those numbers in a few minutes`);
+  logBroadcastHistory({
+    kind:'students', label: window.__bcLabel||'', message: viaCallVoice ? '🎙 (recorded voice message)' : message,
+    viaSms, viaVoice: viaCallTts||viaCallVoice, smsSent, smsFailed, smsSkipped, callSent, callFailed,
+  });
+  closeModal();
+  toast(parts.join(' · ') || 'Nothing sent');
+}
+// Uploads the recorded Blob as base64 JSON (consistent with how this app already round-trips
+// binary — e.g. checkbook signatures — through its JSON API rather than adding a second,
+// multipart-form code path just for this one feature). Returns a URL Twilio's <Play> verb can
+// fetch directly, with no auth of its own — Twilio can't send this app's session bearer token,
+// so the audio has to be reachable by anyone with the (long, random) URL, same trust model as
+// e.g. an unlisted YouTube link.
+async function uploadBroadcastAudio(blob){
+  const buf = await blob.arrayBuffer();
+  let binary = '';
+  const bytes = new Uint8Array(buf);
+  for(let i=0;i<bytes.length;i++) binary += String.fromCharCode(bytes[i]);
+  const base64 = btoa(binary);
+  const res = await backendFetch('/broadcast-audio-upload', {method:'POST', body: JSON.stringify({audioBase64: base64, mime: blob.type})});
+  if(!res.ok){ throw new Error((res.body && res.body.error) || 'Upload failed'); }
+  return res.body.url;
 }
 // A dedicated home for the broadcast feature — always reachable by anyone with
 // sendTransportBroadcasts, even if they can't see Routes, Custom Routes, or the Dashboard at
