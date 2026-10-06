@@ -1604,6 +1604,17 @@ function migrateState(){
   // yet." See advanceGpsStopProgress. Persisted (unlike transportLiveLocations, which only holds
   // the latest ping) specifically so this survives even once the live ping itself goes stale.
   STATE.transportGpsProgress = STATE.transportGpsProgress || {};
+  // Deliberately separate from transportGpsProgress above, not sharing it — that one tracks
+  // progress only (nothing currently reads it for marking anyone), and uses NEAREST-match
+  // scanning on purpose, to avoid leapfrogging a stop on a tight cluster (see its own comment on
+  // advanceGpsStopProgress). This one actually marks riders boarded/dropped-off, and intentionally
+  // uses FARTHEST-match scanning instead — the right tradeoff for marking specifically, since it's
+  // what correctly leaves a genuinely SKIPPED stop's riders unmarked (nobody there today) rather
+  // than guessing, at the cost of the clustering edge case the other tracker was built to avoid.
+  // Keeping these as two independent trackers means neither feature's behavior constrains the
+  // other's design, and nothing about the existing one changes by adding this. Same per-day,
+  // per-route+direction key shape as transportGpsProgress, holding a stop index the same way.
+  STATE.transportAutoMarkProgress = STATE.transportAutoMarkProgress || {};
   // Multi-branch support: a school with only ever one location gets exactly one branch here,
   // built from its existing school name/logo, and every filter keyed off STATE.branches.length<=1
   // becomes a no-op — so this migration is invisible until an Admin actually adds a second branch
@@ -24494,6 +24505,13 @@ function renderTransportRouteDetail(routeId){
       </div>
     </div>
     <div class="form-row" style="margin-bottom:6px;">
+      <label style="cursor:pointer;font-weight:400;display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" ${r.autoMarkEnabled?'checked':''} onchange="setRouteAutoMark('${r.id}',this.checked)">
+        📍 Auto-mark riders boarded/dropped-off from live GPS, as each stop is actually reached
+      </label>
+      <div class="small muted" style="margin-left:24px;">Only while a driver has location sharing on for this route — a human's own tap always wins, and this only ever fills a gap.</div>
+    </div>
+    <div class="form-row" style="margin-bottom:6px;">
       <label style="cursor:pointer;" onclick="VIEW.routeMonitorsExpanded=VIEW.routeMonitorsExpanded||{};VIEW.routeMonitorsExpanded['${r.id}']=!VIEW.routeMonitorsExpanded['${r.id}'];renderContent();">${(VIEW.routeMonitorsExpanded&&VIEW.routeMonitorsExpanded[r.id])?'▾':'▸'} Monitor(s) / aide(s)</label>
       ${(VIEW.routeMonitorsExpanded && VIEW.routeMonitorsExpanded[r.id]) ? `
       <div class="search-box"><input class="tinput" placeholder="Search staff by name..." oninput="filterCheckboxList(this,'routeMonitors_${r.id}')"></div>
@@ -24548,6 +24566,7 @@ function chaperoneRowsHtml(route, dir){
   </div>`).join('');
 }
 function setRouteBus(routeId, busId){ const r=transportRouteById(routeId); r.busId=busId; saveState(); renderContent(); }
+function setRouteAutoMark(routeId, enabled){ const r=transportRouteById(routeId); if(!r) return; r.autoMarkEnabled = enabled; saveState(); renderContent(); }
 // Driver's own address can anchor the real route (see chaperonesNeedingPickup) — swapping
 // drivers can mean picking up/dropping off at a genuinely different address, so both legs get
 // re-sequenced with real drive time immediately rather than leaving yesterday's order/timing in
@@ -25629,6 +25648,62 @@ function advanceGpsStopProgress(routeId, dirOrTripId, lat, lng){
   }
   if(nearestIdx > startIdx) STATE.transportGpsProgress[today][key] = nearestIdx;
 }
+// Automatically marks riders boarded/dropped-off as the live GPS position actually reaches each
+// of a route's stops — ported in from a standalone module the person built and tested separately
+// (see auto-stop-detection.js / auto-stop-detection-explained.md for the original design writeup;
+// this function is that module's `handlePosition` with its five adapter functions filled in using
+// this app's own real functions directly, rather than going through a generic adapter layer).
+// Off by default per route (see r.autoMarkEnabled, toggled in the route editor) — a school that
+// wants manual tapping exactly as before is completely unaffected either way.
+function maybeAutoMarkTransportStops(routeId, dir, lat, lng){
+  const r = transportRouteById(routeId);
+  if(!r || !r.autoMarkEnabled) return;
+  const orderedStops = (r[dir]||[]).map(e=>transportStopById(e.stopId)).filter(s=>s && s.lat!=null && s.lng!=null);
+  if(!orderedStops.length) return;
+
+  const dateISO = todayISO();
+  const key = routeId+'_'+dir;
+  STATE.transportAutoMarkProgress[dateISO] = STATE.transportAutoMarkProgress[dateISO] || {};
+  const lastIndex = STATE.transportAutoMarkProgress[dateISO][key];
+  const startIdx = (lastIndex===undefined || lastIndex===null) ? -1 : lastIndex;
+
+  // Farthest match, not nearest — see the comment on transportAutoMarkProgress's initialization
+  // above for why this tracker specifically wants that, unlike transportGpsProgress.
+  const ARRIVAL_RADIUS_METERS = 90;
+  let farthestMatch = startIdx;
+  for(let i=startIdx+1; i<orderedStops.length; i++){
+    if(distanceMeters(lat, lng, orderedStops[i].lat, orderedStops[i].lng) <= ARRIVAL_RADIUS_METERS) farthestMatch = i;
+  }
+  if(farthestMatch === startIdx) return; // no new stop reached on this GPS update
+
+  STATE.transportAutoMarkProgress[dateISO][key] = farthestMatch;
+  const reachedStop = orderedStops[farthestMatch];
+  const log = transportLogFor(routeId, dir, dateISO);
+
+  // Same relevance rule already used for this route+direction's own "expected riders" checklist
+  // (see isLegCompleted above) — EXCEPT 'override'+sameRoute riders are deliberately left OUT
+  // here, unlike that checklist. A sameRoute override means this route/driver still picks the
+  // student up today, just at a different (one-off, geocoded-on-the-fly) address instead of their
+  // registered stop — so even though they're still "expected" on this route for the checklist's
+  // purposes, their real pickup point isn't this stop's coordinates at all, and GPS reaching THIS
+  // stop says nothing about whether their actual pickup point has been reached.
+  const riderIds = studentsForTransportStop(reachedStop.id)
+    .filter(s=>transportStudentDayInfo(s, dateISO, dir, routeId).kind==='normal')
+    .map(s=>s.id);
+  let markedCount = 0;
+  riderIds.forEach(studentId=>{
+    if(log[studentId]) return; // a human's own mark always wins — this only ever fills a genuine gap
+    markStudentTransportStatus(routeId, dir, studentId, 'present');
+    markedCount++;
+  });
+  if(markedCount>0){
+    // No escapeHtml here, deliberately — toast() renders via textContent (plain text, not HTML),
+    // so escaping first would make a stop label containing e.g. "&" show up literally as "&amp;"
+    // on screen instead of decoding back to "&". escapeHtml is for strings headed into innerHTML;
+    // this one never is.
+    toast(`📍 ${reachedStop.label||'Stop'} — ${markedCount} rider${markedCount===1?'':'s'} auto-marked ${dir==='am'?'boarded':'dropped off'}`);
+  }
+}
 function startSharingLiveLocation(routeId, dir){
   if(!navigator.geolocation){ toast('This browser/device does not support location sharing'); return; }
   const key = routeId+'_'+dir;
@@ -25673,6 +25748,13 @@ function startSharingLiveLocation(routeId, dir){
         // advanceGpsStopProgress.
         advanceGpsStopProgress(routeId, dir, pos.coords.latitude, pos.coords.longitude);
       } catch(e) { console.error('advanceGpsStopProgress failed', e); }
+      try {
+        // A separate, independent feature from the progress tracker right above (see
+        // maybeAutoMarkTransportStops's own comment, and transportAutoMarkProgress's
+        // initialization, for why these two deliberately aren't shared) — off unless a route has
+        // explicitly turned it on.
+        maybeAutoMarkTransportStops(routeId, dir, pos.coords.latitude, pos.coords.longitude);
+      } catch(e) { console.error('maybeAutoMarkTransportStops failed', e); }
       try {
         // Checks whether the driver has arrived at wherever this leg actually ends, and — if so
         // — brings up the same "mark complete?" confirmation the manual button shows, so a
