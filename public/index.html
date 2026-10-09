@@ -14061,7 +14061,10 @@ function renderMailingLabelsSection(){
       <div class="search-box"><input class="tinput" placeholder="Search students..." oninput="filterCheckboxList(this,'mailSpecificStudents')"></div>
       <div class="check-list" id="mailSpecificStudents" style="max-height:220px;">${visibleStudents.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(s=>`<label><input type="checkbox" value="${s.id}"> ${escapeHtml(s.name)}${s.classId?' — '+escapeHtml(className(s.classId)):''}</label>`).join('')}</div>
     </div>` : ''}`}
-    <button class="btn" onclick="generateMailingPrint()">🖨 Generate</button>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" onclick="generateMailingPrint()">🖨 Generate</button>
+      <button class="btn-ghost btn" onclick="exportMailingListExcel()">⬇ Export to Excel</button>
+    </div>
   </div>`;
 }
 // Combines the prefix set in the student modal (Mr./Mrs./Rabbi/etc.) with a parent's name for
@@ -14100,19 +14103,23 @@ function mailingRecipientLine(type, entity, useYiddish){
   const name = (useYiddish && studentYiddishFullName(entity)) ? studentYiddishFullName(entity) : entity.name;
   return { name, address: entity.address||'' };
 }
-function generateMailingPrint(){
+// Shared by every Mailing Labels & Envelopes output — the label/envelope PDF print below, AND
+// the Excel export further down — so the two can never quietly drift apart on who's included,
+// which permission gate applies, or how a name/address is resolved. Returns null (after its own
+// toast explaining why) when there's nothing valid to hand back; a real result is always
+// {type, lines, skipped}.
+function getMailingListSelection(){
   const type = document.getElementById('mailRecipientType').value;
-  const formatKey = document.getElementById('mailFormat').value;
   let pool;
   if(type==='staff'){
     // Server-side-equivalent re-check, not just trusting the dropdown option was hidden — the
     // exact same threshold renderMailingLabelsSection uses to decide whether "Staff" is even
     // offered as a mail-to option at all.
     const canMailStaff = currentStaff().role==='Admin' || currentStaff().role==='Supervisor' || can('editSetup') || can('viewOversight') || canManageStaffDocs();
-    if(!canMailStaff){ toast('You don\'t have permission to print staff mailing labels'); return; }
+    if(!canMailStaff){ toast('You don\'t have permission to print staff mailing labels'); return null; }
     if(VIEW.mailScopeMode==='specific'){
       const checked = [...document.querySelectorAll('#mailSpecificStaff input:checked')].map(el=>el.value);
-      if(!checked.length){ toast('Pick at least one staff member'); return; }
+      if(!checked.length){ toast('Pick at least one staff member'); return null; }
       pool = checked.map(id=>byId(STATE.staff,id)).filter(Boolean);
     } else {
       const activeOnly = document.getElementById('mailActiveOnly').checked;
@@ -14122,10 +14129,10 @@ function generateMailingPrint(){
     // Same re-check pattern as staff above — trust the server-equivalent permission check, not
     // just that the dropdown option happened to be hidden.
     const canMailDonors = currentStaff().role==='Admin' || can('manageFundraising') || can('viewFundraisingReports');
-    if(!canMailDonors){ toast('You don\'t have permission to print donor mailing labels'); return; }
+    if(!canMailDonors){ toast('You don\'t have permission to print donor mailing labels'); return null; }
     if(VIEW.mailScopeMode==='specific'){
       const checked = [...document.querySelectorAll('#mailSpecificDonors input:checked')].map(el=>el.value);
-      if(!checked.length){ toast('Pick at least one donor'); return; }
+      if(!checked.length){ toast('Pick at least one donor'); return null; }
       pool = checked.map(id=>byId(STATE.donors,id)).filter(Boolean);
     } else {
       pool = STATE.donors.slice();
@@ -14140,7 +14147,7 @@ function generateMailingPrint(){
     const visibleIds = new Set(visibleStudents.map(s=>s.id));
     if(VIEW.mailScopeMode==='specific'){
       const checked = [...document.querySelectorAll('#mailSpecificStudents input:checked')].map(el=>el.value).filter(id=>visibleIds.has(id));
-      if(!checked.length){ toast('Pick at least one student'); return; }
+      if(!checked.length){ toast('Pick at least one student'); return null; }
       pool = checked.map(id=>byId(STATE.students,id)).filter(Boolean);
     } else if(VIEW.mailScopeMode==='class'){
       const classId = document.getElementById('mailClassFilter').value;
@@ -14152,10 +14159,60 @@ function generateMailingPrint(){
   const useYiddish = document.getElementById('mailUseYiddish').checked;
   const lines = pool.map(e=>mailingRecipientLine(type, e, useYiddish)).filter(l=>l.address && l.address.trim());
   const skipped = pool.length - lines.length;
-  if(!lines.length){ toast('None of the selected people have an address on file'); return; }
-  if(LABEL_FORMATS[formatKey]) printLabelSheet(LABEL_FORMATS[formatKey], lines);
-  else printMailingEnvelopes(ENVELOPE_FORMATS[formatKey], lines);
-  if(skipped) setTimeout(()=>toast(`${skipped} skipped — no address on file`), 400);
+  if(!lines.length){ toast('None of the selected people have an address on file'); return null; }
+  return { type, lines, skipped };
+}
+function generateMailingPrint(){
+  const formatKey = document.getElementById('mailFormat').value;
+  const sel = getMailingListSelection();
+  if(!sel) return;
+  if(LABEL_FORMATS[formatKey]) printLabelSheet(LABEL_FORMATS[formatKey], sel.lines);
+  else printMailingEnvelopes(ENVELOPE_FORMATS[formatKey], sel.lines);
+  if(sel.skipped) setTimeout(()=>toast(`${sel.skipped} skipped — no address on file`), 400);
+}
+// Same comma-separated address string Mailing Labels & Envelopes already parses for print (see
+// formatAddressForPrint) — split further into actual spreadsheet columns instead of one
+// print-formatted block, since that's what makes a mailing list actually usable for a mail-merge
+// or import elsewhere. Addresses are free-typed, not entered field-by-field anywhere in this app,
+// so this is necessarily best-effort: it assumes the common "Street, City, State Zip[, Country]"
+// shape. A "Full Address" column is always included alongside the split ones specifically so nic
+// nothing is ever lost for an address that doesn't fit that shape — worst case, the split columns
+// come out a little off for an unusual address, but the complete original text is always right
+// there too.
+function parseAddressForExport(address){
+  let parts = String(address||'').split(',').map(p=>p.trim()).filter(Boolean);
+  const last = parts[parts.length-1] || '';
+  if(/^(USA|U\.S\.A\.?|United States(\s+of\s+America)?|US)$/i.test(last)) parts = parts.slice(0,-1);
+  const street = parts[0] || '';
+  const city = parts.length>=3 ? parts.slice(1, -1).join(', ') : (parts.length===2 ? '' : '');
+  const stateZipRaw = parts.length>=2 ? parts[parts.length-1] : '';
+  const stateZipMatch = stateZipRaw.match(/^([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+  const state = stateZipMatch ? stateZipMatch[1].toUpperCase() : '';
+  const zip = stateZipMatch ? stateZipMatch[2] : '';
+  // If "State Zip" didn't parse (an unusual format, a non-US address, etc.), don't silently drop
+  // that text — fold it into City instead of losing it, since City is the more free-form column.
+  const cityFallback = (!stateZipMatch && parts.length>=2) ? [city, stateZipRaw].filter(Boolean).join(', ') : city;
+  return { street, city: cityFallback, state, zip };
+}
+// Downloads an actual .xlsx (via the SheetJS library already loaded at the top of this page for
+// reading uploaded spreadsheets elsewhere — this is that same library's write side) built from
+// the exact same recipient selection Mailing Labels & Envelopes' print path uses, so "export to
+// Excel" and "print labels" can never show a different set of people for the same picks on screen.
+function exportMailingListExcel(){
+  if(typeof XLSX==='undefined'){ toast('Could not load the Excel exporter (check your internet connection) — try again in a moment.'); return; }
+  const sel = getMailingListSelection();
+  if(!sel) return;
+  const rows = sel.lines.map(l=>{
+    const addr = parseAddressForExport(l.address);
+    return { Name: l.name, 'Street Address': addr.street, City: addr.city, State: addr.state, ZIP: addr.zip, 'Full Address': l.address };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{wch:26},{wch:28},{wch:18},{wch:7},{wch:11},{wch:40}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Mailing List');
+  const typeLabel = {students:'Students', parents:'Parents-Guardians', staff:'Staff', donors:'Donors'}[sel.type] || 'Mailing List';
+  XLSX.writeFile(wb, `Mailing List - ${typeLabel} - ${todayISO()}.xlsx`);
+  if(sel.skipped) setTimeout(()=>toast(`${sel.skipped} skipped — no address on file`), 400);
 }
 // A typical stored address ("260 Keap St, Brooklyn, NY 11211, USA") splits into one line per
 // comma-separated part by default, which reads as street / city / state+zip / country all
