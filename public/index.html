@@ -14224,12 +14224,37 @@ const US_STATE_NAME_TO_ABBR = {
   'utah':'UT','vermont':'VT','virginia':'VA','washington':'WA','west virginia':'WV',
   'wisconsin':'WI','wyoming':'WY','district of columbia':'DC',
 };
+// Some addresses in this app's real data have NO commas at all — just space-separated, e.g.
+// "1840 52 Street #9 Brooklyn NY 11204" — rather than the comma-delimited shapes
+// parseAddressForExport otherwise handles. With no delimiter at all between street/city/state,
+// there's no fully general way to know where the street address ends and the city begins (a
+// multi-word city name is genuinely ambiguous here) — but a trailing "STATE ZIP" is still a hard,
+// unambiguous anchor to find, and the single word immediately before it is the city for every
+// real example seen in this app's data (Brooklyn, Lakewood, Monsey — all one word). That's a
+// real assumption, not a universal address-parsing rule: a two-word city in this exact comma-less
+// shape ("...Jackson Heights NY 11372") would only capture "Heights" as City, with "Jackson"
+// absorbed into Street instead. Full Address still holds the untouched original either way, so
+// that specific inaccuracy never loses data — it only affects how neatly City alone reads.
+function parseCommaLessAddress(address){
+  const match = address.match(/^(.*\S)\s+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+  if(!match) return { street: address, line2:'', city:'', state:'', zip:'' };
+  const words = match[1].trim().split(/\s+/);
+  const city = words.length ? words[words.length-1] : '';
+  const street = words.slice(0,-1).join(' ');
+  // street legitimately IS empty whenever there's only a single word before state+zip (e.g. just
+  // "Brooklyn NY 11204" with no street component at all) — that word correctly became city above,
+  // so it must not also be re-inserted into street here (an earlier version of this line did
+  // exactly that, via a `|| match[1]` fallback, duplicating the city into both columns whenever
+  // this ran on a city-only fragment — e.g. from the two-segment path in parseAddressForExport).
+  return { street, line2:'', city, state: match[2].toUpperCase(), zip: match[3] };
+}
 function parseAddressForExport(address){
-  let parts = String(address||'').split(',').map(p=>p.trim()).filter(Boolean);
+  address = String(address||'').trim();
+  let parts = address.split(',').map(p=>p.trim()).filter(Boolean);
   const last = parts[parts.length-1] || '';
   if(/^(USA|U\.S\.A\.?|United States(\s+of\s+America)?|US)$/i.test(last)) parts = parts.slice(0,-1);
   const street = parts[0] || '';
-  if(parts.length<2) return { street, line2:'', city:'', state:'', zip:'' };
+  if(parts.length<2) return address ? parseCommaLessAddress(address) : { street, line2:'', city:'', state:'', zip:'' };
 
   // Shape 1 (most common): state and zip combined in one segment, e.g. "NY 11219".
   const combinedRaw = parts[parts.length-1];
@@ -14257,10 +14282,21 @@ function parseAddressForExport(address){
     const line2 = middle.length>1 ? middle.slice(0,-1).join(', ') : '';
     return { street, line2, city, state: stateNameAbbr, zip: bareZipMatch[1] };
   }
-  // Neither shape matched (a genuinely unusual format, a non-US address, city and state crammed
-  // into one segment with no comma between them, etc.) — rather than guess at a split that might
-  // be wrong, fold everything after Street into City so no text is lost; State and Zip are left
-  // blank rather than populated with a guess.
+  // Neither comma-based shape matched — before giving up, check whether the very last comma
+  // segment is itself a comma-LESS "City ST ZIP" run (e.g. "789 Elm St, Brooklyn NY 11211": one
+  // comma after the street, then city/state/zip all space-separated with none of their own) using
+  // the same anchor-on-trailing-"ST ZIP" approach as parseCommaLessAddress. Only tried on exactly
+  // two segments — with more than two, which earlier segment is Line2 vs. City would be an extra
+  // guess on top of an already-uncertain parse.
+  if(parts.length===2){
+    const inner = parseCommaLessAddress(parts[1]);
+    if(inner.state && inner.zip){
+      return { street: [street, inner.street].filter(Boolean).join(', '), line2:'', city: inner.city, state: inner.state, zip: inner.zip };
+    }
+  }
+  // Truly nothing recognized (a genuinely unusual format, a non-US address, etc.) — rather than
+  // guess at a split that might be wrong, fold everything after Street into City so no text is
+  // lost; State and Zip are left blank rather than populated with a guess.
   return { street, line2:'', city: parts.slice(1).join(', '), state:'', zip:'' };
 }
 // Downloads an actual .xlsx (via the SheetJS library already loaded at the top of this page for
