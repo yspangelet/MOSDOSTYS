@@ -14090,11 +14090,29 @@ function studentYiddishFullName(student, who){
 }
 function mailingRecipientLine(type, entity, useYiddish){
   if(type==='parents'){
-    const names = (useYiddish
-      ? [studentYiddishFullName(entity,'mother')||(entity.mother&&entity.mother.name), studentYiddishFullName(entity,'father')||(entity.father&&entity.father.name)]
-      : [parentDisplayName(entity.mother), parentDisplayName(entity.father)]
-    ).filter(Boolean);
-    return { name: names.length? names.join(' & ') : `Parent/Guardian of ${entity.name}`, address: entity.address||'' };
+    // Formal "Title & Title Surname" form (e.g. "Rabbi & Mrs. Cohen") rather than each parent's
+    // own individual name — father's title first, mother's second, ONE shared family surname
+    // rather than each parent's own full name, and never printed without a surname: a family
+    // with no surname on file (or no parent at all) falls back to "Parent/Guardian of [Student]"
+    // the same way studentParentSalutationFormal (used for Registration letters) already does,
+    // rather than printing a bare, surname-less title. Deliberately NOT reusing
+    // studentParentSalutationFormal itself, even though the logic matches, since that function
+    // joins with the word "and" for a letter's prose salutation — mailing labels keep "&", the
+    // separator already used here before this change and the more conventional one for an
+    // address line specifically.
+    const lastName = useYiddish && entity.yiddishLastName ? entity.yiddishLastName : studentFamilyLastName(entity);
+    const hasMother = !!(entity.mother&&entity.mother.name), hasFather = !!(entity.father&&entity.father.name);
+    let name;
+    if(!lastName || (!hasMother && !hasFather)){
+      name = `Parent/Guardian of ${entity.name}`;
+    } else {
+      const fatherPrefix = (entity.father&&entity.father.prefix) || 'Mr.';
+      const motherPrefix = (entity.mother&&entity.mother.prefix) || 'Mrs.';
+      name = hasFather && hasMother ? `${fatherPrefix} & ${motherPrefix} ${lastName}`
+        : hasFather ? `${fatherPrefix} ${lastName}`
+        : `${motherPrefix} ${lastName}`;
+    }
+    return { name, address: entity.address||'' };
   }
   if(type==='donors'){
     const name = (useYiddish && entity.yiddishName) ? entity.yiddishName : (entity.prefix? `${entity.prefix} ${entity.name}` : entity.name);
@@ -14173,26 +14191,77 @@ function generateMailingPrint(){
 // Same comma-separated address string Mailing Labels & Envelopes already parses for print (see
 // formatAddressForPrint) — split further into actual spreadsheet columns instead of one
 // print-formatted block, since that's what makes a mailing list actually usable for a mail-merge
-// or import elsewhere. Addresses are free-typed, not entered field-by-field anywhere in this app,
-// so this is necessarily best-effort: it assumes the common "Street, City, State Zip[, Country]"
-// shape. A "Full Address" column is always included alongside the split ones specifically so nic
-// nothing is ever lost for an address that doesn't fit that shape — worst case, the split columns
-// come out a little off for an unusual address, but the complete original text is always right
-// there too.
+// or import elsewhere. Addresses are free-typed, not entered field-by-field anywhere in this app
+// (there's no separate "Address Line 2" input anywhere it's collected — an apartment/suite is
+// just another comma-separated segment in the same string), so this is necessarily best-effort.
+// A "Full Address" column is always included alongside the split ones specifically so nothing is
+// ever lost for an address that doesn't fit the shape this assumes — worst case, the split
+// columns come out a little off for an unusual address, but the complete original text is always
+// right there too.
+//
+// Fixed: previously joined EVERY segment between street and "State Zip" straight into one City
+// value — correct for the plain 3-segment case ("Street, City, State Zip"), but for a 4-segment
+// address with a genuine second line ("Street, Apt 4B, City, State Zip") that jammed the apartment
+// line and the real city together into City (e.g. "Apt 4B, Brooklyn"), pushing State/Zip's actual
+// meaning out of alignment with what the column header promises. Now: whatever segment sits
+// directly before "State Zip" is City; anything earlier than that (between Street and City) is
+// Address Line 2 — correctly empty for a plain 3-segment address, correctly populated only when
+// there's genuinely an extra segment to put there.
+// Full state name -> 2-letter abbreviation, for the address shape where geocoding/autocomplete
+// wrote out "...,  Brooklyn, New York, 11219" — state spelled out in full AND split into its own
+// comma segment from the ZIP, rather than the more common "Brooklyn, NY 11219" combined form.
+// Both shapes turn up for real in this app's actual stored addresses (seen directly in exported
+// data), so both need recognizing, not just the combined one.
+const US_STATE_NAME_TO_ABBR = {
+  'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA','colorado':'CO',
+  'connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA','hawaii':'HI','idaho':'ID',
+  'illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS','kentucky':'KY','louisiana':'LA',
+  'maine':'ME','maryland':'MD','massachusetts':'MA','michigan':'MI','minnesota':'MN',
+  'mississippi':'MS','missouri':'MO','montana':'MT','nebraska':'NE','nevada':'NV',
+  'new hampshire':'NH','new jersey':'NJ','new mexico':'NM','new york':'NY','north carolina':'NC',
+  'north dakota':'ND','ohio':'OH','oklahoma':'OK','oregon':'OR','pennsylvania':'PA',
+  'rhode island':'RI','south carolina':'SC','south dakota':'SD','tennessee':'TN','texas':'TX',
+  'utah':'UT','vermont':'VT','virginia':'VA','washington':'WA','west virginia':'WV',
+  'wisconsin':'WI','wyoming':'WY','district of columbia':'DC',
+};
 function parseAddressForExport(address){
   let parts = String(address||'').split(',').map(p=>p.trim()).filter(Boolean);
   const last = parts[parts.length-1] || '';
   if(/^(USA|U\.S\.A\.?|United States(\s+of\s+America)?|US)$/i.test(last)) parts = parts.slice(0,-1);
   const street = parts[0] || '';
-  const city = parts.length>=3 ? parts.slice(1, -1).join(', ') : (parts.length===2 ? '' : '');
-  const stateZipRaw = parts.length>=2 ? parts[parts.length-1] : '';
-  const stateZipMatch = stateZipRaw.match(/^([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/);
-  const state = stateZipMatch ? stateZipMatch[1].toUpperCase() : '';
-  const zip = stateZipMatch ? stateZipMatch[2] : '';
-  // If "State Zip" didn't parse (an unusual format, a non-US address, etc.), don't silently drop
-  // that text — fold it into City instead of losing it, since City is the more free-form column.
-  const cityFallback = (!stateZipMatch && parts.length>=2) ? [city, stateZipRaw].filter(Boolean).join(', ') : city;
-  return { street, city: cityFallback, state, zip };
+  if(parts.length<2) return { street, line2:'', city:'', state:'', zip:'' };
+
+  // Shape 1 (most common): state and zip combined in one segment, e.g. "NY 11219".
+  const combinedRaw = parts[parts.length-1];
+  const combinedMatch = combinedRaw.match(/^([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+  // Shape 2: state spelled out in full and the zip in its own separate trailing segment, e.g.
+  // "..., New York, 11219" — only tried when shape 1 didn't match, since shape 1 is unambiguous
+  // whenever it fits.
+  const bareZipMatch = !combinedMatch && parts.length>=3 ? combinedRaw.match(/^(\d{5}(?:-\d{4})?)$/) : null;
+  const stateNameAbbr = bareZipMatch ? US_STATE_NAME_TO_ABBR[(parts[parts.length-2]||'').toLowerCase()] : null;
+
+  if(combinedMatch){
+    // Everything between street and the recognized "State Zip" segment — last of those is City,
+    // anything earlier is Address Line 2 (almost always 0 or 1 segments; joined on the rare chance
+    // there's more than one, rather than silently dropping any of it).
+    const middle = parts.slice(1, -1);
+    const city = middle.length ? middle[middle.length-1] : '';
+    const line2 = middle.length>1 ? middle.slice(0,-1).join(', ') : '';
+    return { street, line2, city, state: combinedMatch[1].toUpperCase(), zip: combinedMatch[2] };
+  }
+  if(bareZipMatch && stateNameAbbr){
+    // Same idea, just two trailing segments (state, then zip) instead of one combined segment —
+    // City is whatever's directly before the spelled-out state name, Line2 is anything earlier.
+    const middle = parts.slice(1, -2);
+    const city = middle.length ? middle[middle.length-1] : '';
+    const line2 = middle.length>1 ? middle.slice(0,-1).join(', ') : '';
+    return { street, line2, city, state: stateNameAbbr, zip: bareZipMatch[1] };
+  }
+  // Neither shape matched (a genuinely unusual format, a non-US address, city and state crammed
+  // into one segment with no comma between them, etc.) — rather than guess at a split that might
+  // be wrong, fold everything after Street into City so no text is lost; State and Zip are left
+  // blank rather than populated with a guess.
+  return { street, line2:'', city: parts.slice(1).join(', '), state:'', zip:'' };
 }
 // Downloads an actual .xlsx (via the SheetJS library already loaded at the top of this page for
 // reading uploaded spreadsheets elsewhere — this is that same library's write side) built from
@@ -14204,10 +14273,10 @@ function exportMailingListExcel(){
   if(!sel) return;
   const rows = sel.lines.map(l=>{
     const addr = parseAddressForExport(l.address);
-    return { Name: l.name, 'Street Address': addr.street, City: addr.city, State: addr.state, ZIP: addr.zip, 'Full Address': l.address };
+    return { Name: l.name, 'Street Address': addr.street, 'Address Line 2': addr.line2, City: addr.city, State: addr.state, ZIP: addr.zip, 'Full Address': l.address };
   });
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{wch:26},{wch:28},{wch:18},{wch:7},{wch:11},{wch:40}];
+  ws['!cols'] = [{wch:26},{wch:28},{wch:16},{wch:18},{wch:7},{wch:11},{wch:40}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Mailing List');
   const typeLabel = {students:'Students', parents:'Parents-Guardians', staff:'Staff', donors:'Donors'}[sel.type] || 'Mailing List';
